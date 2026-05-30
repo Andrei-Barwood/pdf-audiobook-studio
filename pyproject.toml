@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-audiobook-studio"
+version = "1.0.0"
+description = "Convert complex and long PDF documents into natural audiobooks"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "Andrei Barwood" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "PySide6>=6.5.0",
+    "PyMuPDF>=1.22.0",
+    "pyttsx3>=2.90",
+    "edge-tts>=6.1.5",
+    "gTTS>=2.3.2",
+    "pydub>=0.25.1",
+    "pytesseract>=0.3.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/andreibarwood/pdf-audiobook-studio"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

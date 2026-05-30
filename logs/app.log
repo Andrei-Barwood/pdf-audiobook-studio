@@ -1,0 +1,2 @@
+[2026-05-26 16:59:20] INFO [pdf_audiobook_studio.chunk_pages:86] - Chunked 2 pages into 3 audio blocks (Max length limit: 30 chars).
+[2026-05-26 16:59:20] INFO [pdf_audiobook_studio.chunk_pages:86] - Chunked 3 pages into 1 audio blocks (Max length limit: 100 chars).

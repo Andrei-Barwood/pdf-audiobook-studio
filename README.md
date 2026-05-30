@@ -46,16 +46,32 @@ git clone https://github.com/TU_USUARIO/pdf-audiobook-studio.git
 cd pdf-audiobook-studio
 ```
 
-### 2. Crear un Entorno Virtual e instalar dependencias
-Es altamente recomendable usar un entorno virtual:
+### 2. Instalación Automática 🚀
+Para ahorrarte el trabajo de instalar dependencias manualmente, hemos incluido scripts de instalación automática que configuran `ffmpeg`, crean el entorno virtual e instalan todas las librerías de Python (`PySide6`, `PyMuPDF`, `edge-tts`, etc.).
+
+**En macOS / Linux (usando la terminal):**
 ```bash
-python3 -m venv venv
-source venv/bin/activate  # En Windows: venv\Scripts\activate
-pip install -r requirements.txt
+./install.sh
+```
+*(Si usas `pyenv` con un entorno llamado `hokkaido`, el script lo detectará automáticamente. De lo contrario, creará un entorno `venv` estándar).*
+
+**En Windows (usando PowerShell):**
+```powershell
+.\install.ps1
 ```
 
 ### 3. Ejecutar la Aplicación
+Una vez finalizada la instalación, inicia el entorno virtual y corre la aplicación:
+
+**En macOS / Linux:**
 ```bash
+source venv/bin/activate  # O usa 'pyenv activate hokkaido'
+python main.py
+```
+
+**En Windows:**
+```powershell
+.\venv\Scripts\activate
 python main.py
 ```
 

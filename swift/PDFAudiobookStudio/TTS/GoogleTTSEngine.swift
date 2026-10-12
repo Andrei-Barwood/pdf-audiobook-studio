@@ -106,7 +106,9 @@ final class GoogleTTSEngine: TTSEngine {
                     "responseModalities": ["AUDIO"],
                     "speechConfig": [
                         "voiceConfig": [
-                            "voiceName": rawVoice
+                            "prebuiltVoiceConfig": [
+                                "voiceName": rawVoice
+                            ]
                         ]
                     ]
                 ]

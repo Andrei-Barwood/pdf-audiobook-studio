@@ -488,6 +488,10 @@ final class StudioViewModel: ObservableObject {
             showSettings = true
             return
         }
+        if engine == .google && (KeychainStore.googleAPIKey?.isEmpty ?? true) {
+            showSettings = true
+            return
+        }
         isPreviewing = true
         let sample = VoiceCatalog.sampleText(for: voice)
         let dest = AppPaths.cache.appendingPathComponent("preview_\(voice.voiceID).mp3")
@@ -525,7 +529,19 @@ final class StudioViewModel: ObservableObject {
 
     private func play(url: URL) {
         do {
-            previewPlayer = try AVAudioPlayer(contentsOf: url)
+            let data = try Data(contentsOf: url)
+            guard !data.isEmpty else {
+                throw StudioError.audio("El archivo de audio está vacío.")
+            }
+            if data.prefix(4) == Data("RIFF".utf8) {
+                previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.wav.rawValue)
+            } else if data.prefix(3) == Data("ID3".utf8) || (data.count > 1 && data[0] == 0xFF && (data[1] & 0xE0) == 0xE0) {
+                previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.mp3.rawValue)
+            } else if data.count >= 8 && data.subdata(in: 4..<8) == Data("ftyp".utf8) {
+                previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.m4a.rawValue)
+            } else {
+                previewPlayer = try AVAudioPlayer(contentsOf: url)
+            }
             previewPlayer?.prepareToPlay()
             previewPlayer?.play()
         } catch {

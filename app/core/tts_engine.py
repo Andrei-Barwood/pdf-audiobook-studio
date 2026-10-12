@@ -243,6 +243,32 @@ class GoogleCloudTTSEngine(BaseTTSEngine):
                     for p in parts:
                         if "inlineData" in p:
                             audio_bytes = base64.b64decode(p["inlineData"]["data"])
+                            if output_path.lower().endswith(".mp3"):
+                                from app.utils.file_utils import check_ffmpeg_installed
+                                if check_ffmpeg_installed():
+                                    import tempfile
+                                    import subprocess
+                                    import shutil
+                                    tmp_wav = None
+                                    try:
+                                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f_tmp:
+                                            f_tmp.write(audio_bytes)
+                                            tmp_wav = f_tmp.name
+                                        ffmpeg_bin = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+                                        subprocess.run(
+                                            [ffmpeg_bin, "-loglevel", "error", "-y", "-i", tmp_wav, "-c:a", "libmp3lame", "-b:a", "192k", output_path],
+                                            check=True
+                                        )
+                                        logger.info(f"Gemini WAV transcoded to MP3 via ffmpeg: {output_path}")
+                                        return
+                                    except Exception as ex:
+                                        logger.warning(f"ffmpeg conversion to MP3 failed: {ex}. Writing WAV directly.")
+                                    finally:
+                                        if tmp_wav and os.path.exists(tmp_wav):
+                                            try:
+                                                os.remove(tmp_wav)
+                                            except OSError:
+                                                pass
                             with open(output_path, "wb") as f:
                                 f.write(audio_bytes)
                             return

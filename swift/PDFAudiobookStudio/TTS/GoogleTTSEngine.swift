@@ -142,6 +142,14 @@ final class GoogleTTSEngine: TTSEngine {
                     }
 
                     if let audio = foundAudioData, !audio.isEmpty {
+                        if url.pathExtension.lowercased() == "mp3" && AudioBuilder.isFFmpegAvailable {
+                            do {
+                                try AudioBuilder.convertWAVToMP3(wavData: audio, to: url)
+                                return
+                            } catch {
+                                AppLog.write("Transcodificación FFmpeg de WAV a MP3 falló: \(error.localizedDescription); guardando WAV directo.")
+                            }
+                        }
                         try audio.write(to: url, options: .atomic)
                         return
                     }

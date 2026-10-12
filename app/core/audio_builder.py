@@ -58,26 +58,36 @@ class AudioBuilder:
         if format_ext not in AudioBuilder.SUPPORTED_FORMATS:
             raise AudioBuilderError(f"Unsupported format '{format_ext}'. Supported: {AudioBuilder.SUPPORTED_FORMATS}")
 
-        # Never decode a whole chapter/book into RAM (pydub AudioSegment += ...).
-        # Neural TTS writes MP3; stream-copy those bytes, then optionally remux.
-        staging_path = output_path + ".staging.mp3"
+        is_wav = False
         try:
-            logger.info(f"Merging {len(valid_paths)} chunks by streaming copy (no in-memory decode)...")
-            AudioBuilder._binary_merge_mp3(valid_paths, staging_path)
+            with open(valid_paths[0], "rb") as f_chk:
+                is_wav = (f_chk.read(4) == b"RIFF")
+        except Exception:
+            pass
+
+        staging_ext = "wav" if is_wav else "mp3"
+        staging_path = output_path + f".staging.{staging_ext}"
+        try:
+            logger.info(f"Merging {len(valid_paths)} chunks by streaming copy ({staging_ext})...")
+            if is_wav:
+                AudioBuilder._binary_merge_wav(valid_paths, staging_path)
+            else:
+                AudioBuilder._binary_merge_mp3(valid_paths, staging_path)
+
             if os.path.getsize(staging_path) <= 0:
                 raise AudioBuilderError("La unión de bloques produjo un archivo vacío.")
 
-            if format_ext == "mp3":
+            if format_ext == staging_ext:
                 os.replace(staging_path, output_path)
                 logger.info(f"Audiobook exported by stream copy to: {output_path}")
                 return
 
             if not has_ffmpeg:
-                mp3_fallback = os.path.splitext(output_path)[0] + ".mp3"
-                os.replace(staging_path, mp3_fallback)
+                fallback_file = os.path.splitext(output_path)[0] + f".{staging_ext}"
+                os.replace(staging_path, fallback_file)
                 raise AudioBuilderError(
                     f"No hay ffmpeg para convertir a {format_ext.upper()}. "
-                    f"El audio quedó guardado como MP3 en {mp3_fallback}"
+                    f"El audio quedó guardado como {staging_ext.upper()} en {fallback_file}"
                 )
 
             AudioBuilder._ffmpeg_transcode(staging_path, output_path, format_ext, metadata)
@@ -174,6 +184,41 @@ class AudioBuilder:
         return tags
 
     @staticmethod
+    def _binary_merge_wav(paths: List[str], output_path: str) -> None:
+        """Stitches standard PCM WAV files at a binary level without loading a whole chapter into RAM."""
+        import struct
+        bufsize = 256 * 1024
+        try:
+            with open(paths[0], "rb") as f_first:
+                first_data = f_first.read(128)
+
+            data_chunk_idx = first_data.find(b"data")
+            header_len = 44 if data_chunk_idx == -1 else data_chunk_idx + 8
+
+            total_pcm_bytes = 0
+            with open(output_path, "wb") as outfile:
+                with open(paths[0], "rb") as f_first:
+                    outfile.write(f_first.read(header_len))
+
+                for path in paths:
+                    with open(path, "rb") as infile:
+                        infile.seek(header_len)
+                        while True:
+                            chunk = infile.read(bufsize)
+                            if not chunk:
+                                break
+                            outfile.write(chunk)
+                            total_pcm_bytes += len(chunk)
+
+                if data_chunk_idx != -1:
+                    outfile.seek(data_chunk_idx + 4)
+                    outfile.write(struct.pack("<I", total_pcm_bytes))
+                outfile.seek(4)
+                outfile.write(struct.pack("<I", total_pcm_bytes + header_len - 8))
+        except Exception as e:
+            raise RuntimeError(f"Binary WAV stream write error: {e}")
+
+    @staticmethod
     def _binary_merge_mp3(paths: List[str], output_path: str) -> None:
         """Stitches MP3 files at a binary level without loading a whole chapter into RAM."""
         bufsize = 256 * 1024
@@ -191,15 +236,24 @@ class AudioBuilder:
 
     @staticmethod
     def _ffmpeg_transcode(
-        source_mp3: str,
+        source_audio: str,
         output_path: str,
         format_ext: str,
         metadata: Optional[Dict[str, str]] = None,
     ) -> None:
-        """Remux/transcode a already-concatenated MP3. ffmpeg streams; it does not hold PCM in Python."""
+        """Remux/transcode audio file using ffmpeg."""
         import subprocess
+        import shutil
 
-        cmd = ["ffmpeg", "-y", "-i", source_mp3]
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            for cand in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]:
+                if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                    ffmpeg_bin = cand
+                    break
+        ffmpeg_bin = ffmpeg_bin or "ffmpeg"
+
+        cmd = [ffmpeg_bin, "-y", "-i", source_audio]
         tags = AudioBuilder._build_tags(metadata) if metadata else {}
         for key, value in tags.items():
             cmd.extend(["-metadata", f"{key}={value}"])
@@ -207,6 +261,8 @@ class AudioBuilder:
             cmd.extend(["-c:a", "aac", "-b:a", "64k", output_path])
         elif format_ext == "wav":
             cmd.extend(["-c:a", "pcm_s16le", output_path])
+        elif format_ext == "mp3":
+            cmd.extend(["-c:a", "libmp3lame", "-b:a", "192k", output_path])
         else:
             cmd.extend(["-c", "copy", output_path])
         try:

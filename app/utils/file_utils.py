@@ -18,11 +18,14 @@ def get_temp_dir() -> pathlib.Path:
     return path
 
 def check_ffmpeg_installed() -> bool:
-    """Checks if ffmpeg is available on the system PATH."""
-    has_ffmpeg = shutil.which("ffmpeg") is not None
-    if not has_ffmpeg:
-        logger.warning("ffmpeg was not detected on system PATH. Direct high-performance merging will be disabled, falling back to binary concatenation for MP3 files.")
-    return has_ffmpeg
+    """Checks if ffmpeg is available on the system PATH or standard locations."""
+    if shutil.which("ffmpeg") is not None:
+        return True
+    for cand in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return True
+    logger.warning("ffmpeg was not detected on system PATH. Direct high-performance merging will fall back to binary concatenation.")
+    return False
 
 def cached_audio_count() -> int:
     """Counts non-empty audio files in the temp cache."""

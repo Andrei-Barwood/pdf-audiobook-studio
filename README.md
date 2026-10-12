@@ -1,118 +1,154 @@
 # 🎧 PDF Audiobook Studio 🎙️
 
-![PDF Audiobook Studio](https://img.shields.io/badge/Status-Ready%20for%20Distribution-success) ![Python](https://img.shields.io/badge/Python-3.13-blue) ![PySide6](https://img.shields.io/badge/GUI-PySide6-green)
+![macOS Sequoia](https://img.shields.io/badge/macOS-14%2B%20Sequoia-black?logo=apple) ![Swift 5.0](https://img.shields.io/badge/Swift-Native%20macOS-orange?logo=swift) ![Python 3.13](https://img.shields.io/badge/Python-3.13-blue?logo=python) ![PySide6](https://img.shields.io/badge/GUI-PySide6-green?logo=qt) ![Licencia](https://img.shields.io/badge/License-MIT-purple)
 
-**PDF Audiobook Studio** es una aplicación de escritorio profesional y elegante diseñada para convertir documentos PDF largos (incluso de más de 160 páginas) en archivos de audio de alta calidad. ¡Convierte tus libros, apuntes o manuales en audiolibros organizados y llévalos contigo a donde quieras! 🚀
+**PDF Audiobook Studio** es una aplicación de escritorio diseñada para convertir documentos PDF extensos (libros, manuales, artículos o apuntes de cientos de páginas) en audiolibros de calidad profesional. Cuenta con dos ediciones independientes: una **aplicación nativa en Swift (macOS)** optimizada para el ecosistema Apple y una **versión multiplataforma en Python (PySide6)**.
 
-Hay dos ediciones:
+---
 
-| Edición | Dónde | Voces |
-|---|---|---|
-| Python (PySide6) | `python main.py` | Edge-TTS, gTTS, voces locales |
-| **Swift nativa (macOS)** | [`swift/`](swift/README.md) | Voces **neuronales** de Microsoft Edge, **Grok TTS (xAI)** y OpenAI TTS. **No usa las voces de macOS** (demasiado robóticas). |
+## 🌟 Dos Ediciones Disponibles
+
+| Edición | Plataforma | Cómo ejecutar | Motores de Voz |
+|---|---|---|---|
+| **Swift Nativa (macOS)** 🍎 | macOS 14+ | `cd swift && ./build.sh` | **Google AI Pro / Cloud TTS**, **Microsoft Edge Neural**, **Grok TTS (xAI)**, **OpenAI TTS** |
+| **Python (PySide6)** 🐍 | macOS / Linux / Windows | `python main.py` | **Google AI Pro / Cloud TTS**, **Edge-TTS**, **gTTS**, **pyttsx3 (local)** |
+
+> [!NOTE]
+> La edición nativa de macOS **no utiliza las voces del sistema de Apple** (AVSpeechSynthesizer), ya que su entonación plana y sintética resulta monótona en lecturas largas. En su lugar, emplea modelos neuronales en la nube que modulan la prosodia, pausas y emoción según el contexto de cada oración.
+
+---
+
+## 🎙️ Motores de Voz Soportados
+
+### 1. 👑 Google AI Pro / Cloud TTS (Voces Hermosas de Google)
+Compatible con cuentas **Google AI Pro** (como cuentas de Gemini Advanced) y claves de Google Cloud o [Google AI Studio](https://aistudio.google.com/apikey).
+* **Voces Journey (Hiperrealistas y Narrativas):**
+  * `es-ES-Journey-F`: **Journey · Princesa de Cuento 👑** (Voz femenina dulce, mágica y cautivadora, perfecta para historias y novelas).
+  * `es-ES-Journey-D`: **Journey · Narrador Legendario** (Voz masculina profunda y literaria).
+  * `es-US-Journey-F`: **Journey · Princesa Latina 👑** (Español neutro / US, cálida y encantadora).
+  * `es-US-Journey-D`: **Journey · Narrador Latino** (Tono envolvente y cercano).
+* **Voces Studio (Grabadas en estudio acústico profesional):**
+  * `es-ES-Studio-C`: **Studio · Dama Distinguida ✨** (Timbre fino y refinado).
+  * `es-ES-Studio-F`: **Studio · Narradora Cálida** (Articulación de élite para audiolibros extensos).
+* **Voces Multimodales Gemini (Google DeepMind - `gemini-3.8-flash`):**
+  * `gemini-kore`: **Kore (Princesa Dulce) 🌸**
+  * `gemini-aoede`: **Aoede (Musa Artística) 🎶**
+  * `gemini-leda`: **Leda (Regia y Elegante) 👑**
+  * `gemini-callirrhoe`: **Callirrhoe (Cristalina) 💧**
+  * `gemini-puck`, `gemini-charon`, `gemini-fenrir`, `gemini-zephyr`.
+* **Voces Neural2 (DeepMind):** `es-ES-Neural2-A`, `es-ES-Neural2-C` (Dulce y Melódica), `es-ES-Neural2-E` (Princesa Serena).
+
+### 2. ⚡ Microsoft Edge Neural (Gratis y sin API Key)
+Voces neuronales de alta calidad de Microsoft Edge (`Álvaro`, `Elvira`, `Dalia`, `Jorge`, `Elena`, `Andrew Multilingual`...). Conectado al endpoint de alta disponibilidad `api.msedgeservices.com`.
+
+### 3. 🧠 Grok TTS (xAI)
+Voces de xAI (`Ara`, `Eve`, `Rex`, `Sal`...). Incluye detección automática de español y normalización de números y abreviaturas. Requiere API key de [console.x.ai](https://console.x.ai).
+
+### 4. 📖 OpenAI TTS
+Voces neuronales (`Coral`, `Verse`, `Ballad`, `Sage`...) con instrucciones especializadas de narrador de audiolibro para dramatizar preguntas, exclamaciones y diálogos. Requiere API key de [platform.openai.com](https://platform.openai.com).
 
 ---
 
 ## ✨ Características Principales
 
-*   **🎙️ Múltiples Motores de Voz (TTS):** Soporte para Edge-TTS (voces neuronales de alta calidad), pyttsx3 (offline) y gTTS (Google).
-*   **📚 Soporte para Documentos Largos:** Procesamiento optimizado por bloques (chunks) para no saturar la memoria, ideal para PDFs de cientos de páginas.
-*   **🗂️ Un archivo por capítulo:** Lee el índice del PDF (marcadores o encabezados) y exporta una carpeta con un audio por parte o capítulo. Si el índice mezcla secciones al mismo nivel, agrupa por PARTES / capítulos.
-*   **⏸️ Control Total:** Posibilidad de pausar, reanudar o cancelar la conversión en cualquier momento.
-*   **💾 Persistencia:** Tu progreso se guarda automáticamente en una base de datos local (SQLite). ¡Si cierras la app, puedes continuar desde donde lo dejaste!
-*   **🎵 Formatos de Exportación:** Soporte para salida en `.mp3`, `.wav` y `.m4a` (con metadatos y etiquetas).
-*   **🎨 Interfaz Moderna y Elegante:** Desarrollada con PySide6, incluye temas Claro 💡 y Oscuro 🌙, barra de progreso interactiva y una terminal de registros en tiempo real.
+* **🗂️ Un Archivo por Capítulo:** Detecta automáticamente el índice del PDF (marcadores TOC o encabezados tipográficos) y exporta una carpeta con un archivo de audio independiente por cada capítulo o parte.
+* **🔍 Vision OCR Nativo:** En macOS, los PDFs escaneados o basados en imágenes son procesados automáticamente mediante Apple Vision OCR (español e inglés) sin necesidad de Tesseract.
+* **💾 Persistencia con SQLite:** El progreso de conversión se guarda bloque por bloque en una base de datos local. Si cierras la aplicación o se interrumpe la conexión, puedes reanudar el proyecto exactamente donde quedó.
+* **⏸️ Control de Conversión:** Pausa, reanuda o cancela la conversión en cualquier momento con liberación inmediata de recursos.
+* **🧹 Limpieza Inteligente de Texto:** Normalización de ligaduras tipográficas, corrección de guiones de fin de línea, eliminación de pies de página repetitivos y opción de **"Omitir símbolos"** para evitar que el motor pronuncie caracteres como asteriscos o barras.
+* **🎵 Formatos de Salida:** Exportación directa en **MP3** (unión sin pérdidas de streams neuronales), **M4A** (con metadatos AAC) y **WAV**.
+* **🔐 Seguridad de Credenciales:** En macOS, todas las claves de API (Google, xAI, OpenAI) se almacenan de forma segura y encriptada en el **Llavero del Sistema (Apple Keychain)**.
+* **🌓 Modo Claro y Oscuro:** Diseño visual moderno adaptado a las preferencias del sistema.
 
 ---
 
-## 🛠️ Requisitos Previos (Dependencias)
+## 🚀 Inicio Rápido
 
-Para ejecutar esta aplicación localmente, necesitarás:
+### Edición Nativa para Mac (Swift / SwiftUI)
 
-1.  **Python 3.13** instalado en tu sistema.
-2.  **FFmpeg:** Requerido para exportar en M4A y unir audios con precisión. 
-    *   En macOS: `brew install ffmpeg`
-    *   En Windows: Descarga y añade FFmpeg al PATH.
-    *   En Linux: `sudo apt install ffmpeg`
+#### Requisitos:
+* macOS 14 (Sequoia) o superior.
+* Xcode 16+ instalado.
+* XcodeGen: `brew install xcodegen`
 
-### Librerías de Python
-Las dependencias están listadas en el archivo `requirements.txt`:
-*   `PySide6` (Interfaz Gráfica)
-*   `PyMuPDF` (Extracción de texto rápida y precisa)
-*   `edge-tts`, `pyttsx3`, `gTTS` (Motores de Texto a Voz)
-*   `pydub` (Manipulación y unión de audio)
-
----
-
-## 🚀 Instalación y Uso (Tutorial)
-
-Sigue estos sencillos pasos para empezar a usar la aplicación:
-
-### 1. Clonar el repositorio
+#### Compilación y ejecución:
 ```bash
-git clone https://github.com/TU_USUARIO/pdf-audiobook-studio.git
-cd pdf-audiobook-studio
+cd swift
+./build.sh
 ```
+El script generará el proyecto con XcodeGen, compilará el binario y abrirá la aplicación lista para usar.
 
-### 2. Instalación Automática 🚀
-Para ahorrarte el trabajo de instalar dependencias manualmente, hemos incluido scripts de instalación automática que configuran `ffmpeg`, crean el entorno virtual e instalan todas las librerías de Python (`PySide6`, `PyMuPDF`, `edge-tts`, etc.).
+---
 
-**En macOS / Linux (usando la terminal):**
+### Edición en Python (PySide6)
+
+#### Requisitos:
+* Python 3.13.
+* FFmpeg instalado (`brew install ffmpeg` en macOS, o en el PATH en Windows/Linux).
+
+#### Instalación rápida:
 ```bash
+# macOS / Linux
 ./install.sh
-```
-*(Si usas `pyenv` con un entorno llamado `hokkaido`, el script lo detectará automáticamente. De lo contrario, creará un entorno `venv` estándar).*
-
-**En Windows (usando PowerShell):**
-```powershell
-.\install.ps1
-```
-
-### 3. Ejecutar la Aplicación
-Una vez finalizada la instalación, inicia el entorno virtual y corre la aplicación:
-
-**En macOS / Linux:**
-```bash
-source venv/bin/activate  # O usa 'pyenv activate hokkaido'
+source venv/bin/activate
 python main.py
-```
 
-**En Windows:**
-```powershell
+# Windows (PowerShell)
+.\install.ps1
 .\venv\Scripts\activate
 python main.py
 ```
 
-### 4. ¡Convierte tu primer PDF!
-1. Arrastra y suelta un archivo `.pdf` en el área de carga.
-2. Selecciona el rango de páginas.
-3. Elige el motor de voz (recomendamos **Edge-TTS** para máxima calidad) y ajusta la velocidad.
-4. Si el PDF tiene índice, activa **Un archivo por capítulo** para obtener una carpeta con un audio por parte/capítulo en lugar de un solo archivo.
-5. Selecciona la carpeta de destino.
-6. Haz clic en **"▶ Iniciar Conversión"**.
-7. ¡Relájate mientras la aplicación hace la magia! ✨ Puedes ver el progreso en tiempo real en la terminal inferior.
+---
+
+## 🔑 Configuración de Claves de API (Opcional)
+
+Puedes usar la aplicación inmediatamente de forma gratuita con las voces **Edge Neural**. Si deseas habilitar los motores de IA avanzada:
+
+1. **Google AI Pro / Cloud TTS:**
+   * Entra a [Google AI Studio](https://aistudio.google.com/apikey) con tu cuenta de Google.
+   * Crea una API Key (gratuita e inmediata).
+   * En la app, abre **Ajustes**, pega tu clave y haz clic en **Guardar**.
+2. **Grok TTS:** Obtén tu clave en [console.x.ai](https://console.x.ai/team/default/api-keys) (`xai-...`).
+3. **OpenAI TTS:** Obtén tu clave en [platform.openai.com/api-keys](https://platform.openai.com/api-keys) (`sk-...`).
 
 ---
 
-## 🏗️ Arquitectura del Proyecto
+## 🏗️ Estructura del Repositorio
 
-El proyecto está diseñado con una arquitectura robusta MVC y multiproceso:
-
-*   `main.py`: Punto de entrada que inicializa la GUI.
-*   `app/gui/`: Contiene la ventana principal, temas personalizados y widgets.
-*   `app/core/`: Motores de procesamiento, extracción de PDF, limpieza de texto, conversión a voz y ejecución asíncrona (`QThread`).
-*   `app/data/`: Manejo de SQLite para persistencia y recuperación de proyectos fallidos.
-*   `tests/`: Suite de pruebas unitarias automatizadas (`pytest`).
+```
+pdf-audiobook-studio/
+├── swift/                         # Edición nativa macOS (SwiftUI)
+│   ├── PDFAudiobookStudio/
+│   │   ├── Models/               # Catálogo de voces, modelos y opciones
+│   │   ├── Pipeline/             # Extractor PDF, Vision OCR, Chunker, AudioBuilder
+│   │   ├── TTS/                  # Clientes TTS (Google, Edge, Grok, OpenAI)
+│   │   ├── Persistence/          # SQLite Store y Keychain Manager
+│   │   └── Views/                # Vistas SwiftUI, temas y ViewModels
+│   ├── build.sh                  # Script de compilación automática
+│   └── project.yml               # Especificación de XcodeGen
+├── app/                           # Edición Python (PySide6)
+│   ├── core/                     # Lógica de audio, extracción, chunker y TTS
+│   ├── gui/                      # Interfaz PySide6 y widgets
+│   ├── data/                     # Persistencia SQLite
+│   └── utils/                    # Manejo de archivos y logs
+├── tests/                         # Pruebas unitarias
+├── install.sh / install.ps1       # Scripts de instalación de entorno
+├── main.py                        # Entrada de la versión Python
+└── requirements.txt               # Dependencias de Python
+```
 
 ---
 
-## 👨‍💻 Contribución
+## 🧪 Pruebas Unitarias
 
-¡Las contribuciones son bienvenidas! Siéntete libre de hacer un _fork_ del repositorio y enviar un _pull request_.
-
-## ⚖️ Aviso Legal y Copyright
-
-⚠️ **Importante:** Esta aplicación está diseñada para uso personal. Asegúrate de tener los derechos o el permiso necesario para convertir y reproducir el contenido de los documentos PDF que proceses. No promuevas la infracción de derechos de autor.
+Para ejecutar la batería de pruebas automatizadas:
+```bash
+python -m unittest discover tests
+```
 
 ---
-_Hecho con ❤️ para que nunca pares de aprender y escuchar._
+
+## ⚖️ Licencia y Aviso Legal
+
+Este proyecto se distribuye bajo la licencia MIT. Diseñado para uso personal y educativo. Asegúrate de contar con los derechos o autorización correspondiente de los documentos que proceses.

@@ -82,7 +82,7 @@ final class GoogleTTSEngine: TTSEngine {
 
     private func synthesizeWithGemini(text: String, voiceID: String, apiKey: String, to url: URL) async throws {
         let rawVoice = voiceID.replacingOccurrences(of: "gemini-", with: "").capitalized
-        let model = "gemini-2.0-flash"
+        let model = "gemini-3.8-flash"
         guard let endpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
             throw StudioError.tts("URL de Google Gemini inválida.")
         }

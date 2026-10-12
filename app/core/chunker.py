@@ -7,7 +7,11 @@ class TextChunker:
     """Splits PDF page texts into logical and safely-sized blocks for optimal TTS synthesis."""
 
     @staticmethod
-    def chunk_pages(pages: List[Dict[str, Any]], max_chars: int = 2000) -> List[Dict[str, Any]]:
+    def chunk_pages(
+        pages: List[Dict[str, Any]],
+        max_chars: int = 2000,
+        omit_symbols: bool = True,
+    ) -> List[Dict[str, Any]]:
         """
         Processes pages and yields a list of chunk dictionaries.
         Each page in 'pages' should contain:
@@ -37,7 +41,7 @@ class TextChunker:
             raw_text = page["raw_text"]
             
             # Clean the page text
-            cleaned_page = TextCleaner.clean(raw_text)
+            cleaned_page = TextCleaner.clean(raw_text, omit_symbols=omit_symbols)
             
             # If the page is empty, log it and skip to avoid sending empty inputs to TTS
             if not cleaned_page:

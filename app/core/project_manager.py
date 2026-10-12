@@ -16,7 +16,8 @@ class ProjectManager:
         engine_type: str,
         voice_id: str,
         rate: float,
-        format_ext: str = "mp3"
+        format_ext: str = "mp3",
+        split_by_chapter: bool = False,
     ) -> Dict[str, Any]:
         """Creates a new project record and returns the project data dictionary."""
         project_id = str(uuid.uuid4())
@@ -28,10 +29,10 @@ class ProjectManager:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO projects (id, name, pdf_path, output_dir, created_at, status, engine_type, voice_id, rate, format_ext)
-                VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
+                INSERT INTO projects (id, name, pdf_path, output_dir, created_at, status, engine_type, voice_id, rate, format_ext, split_by_chapter)
+                VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?)
                 """,
-                (project_id, name, pdf_path, output_dir, created_at, engine_type, voice_id, rate, format_ext)
+                (project_id, name, pdf_path, output_dir, created_at, engine_type, voice_id, rate, format_ext, 1 if split_by_chapter else 0)
             )
             conn.commit()
             logger.info(f"Project '{name}' successfully created in database. ID: {project_id}")
@@ -46,7 +47,8 @@ class ProjectManager:
                 "engine_type": engine_type,
                 "voice_id": voice_id,
                 "rate": rate,
-                "format_ext": format_ext
+                "format_ext": format_ext,
+                "split_by_chapter": bool(split_by_chapter),
             }
         except Exception as e:
             logger.error(f"Failed to create project record: {e}")
@@ -128,15 +130,20 @@ class ProjectManager:
                     c["clean_text"],
                     c.get("audio_path"),
                     c.get("status", "PENDING"),
-                    c.get("error_message")
+                    c.get("error_message"),
+                    c.get("chapter_index"),
+                    c.get("chapter_title"),
                 )
                 for c in chunks
             ]
             
             cursor.executemany(
                 """
-                INSERT OR IGNORE INTO chunks (project_id, chunk_index, page_number, original_text, clean_text, audio_path, status, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO chunks (
+                    project_id, chunk_index, page_number, original_text, clean_text,
+                    audio_path, status, error_message, chapter_index, chapter_title
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 params
             )

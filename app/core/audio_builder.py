@@ -4,14 +4,6 @@ from app.utils.logger import logger
 from app.utils.file_utils import check_ffmpeg_installed
 from app.utils.errors import AudioBuilderError
 
-try:
-    from pydub import AudioSegment
-    from pydub.effects import normalize
-    PYDUB_AVAILABLE = True
-except ImportError:
-    PYDUB_AVAILABLE = False
-
-
 class AudioBuilder:
     """Concatenates, normalizes, and packages audio chunks into final output audiobook files.
     
@@ -66,72 +58,36 @@ class AudioBuilder:
         if format_ext not in AudioBuilder.SUPPORTED_FORMATS:
             raise AudioBuilderError(f"Unsupported format '{format_ext}'. Supported: {AudioBuilder.SUPPORTED_FORMATS}")
 
-        # M4A/M4B require ffmpeg unconditionally
-        if format_ext in ("m4a", "m4b") and not has_ffmpeg:
-            raise AudioBuilderError(
-                f"Cannot export to {format_ext.upper()} without ffmpeg installed. "
-                "Please install ffmpeg (brew install ffmpeg) or choose MP3/WAV."
-            )
+        # Never decode a whole chapter/book into RAM (pydub AudioSegment += ...).
+        # Neural TTS writes MP3; stream-copy those bytes, then optionally remux.
+        staging_path = output_path + ".staging.mp3"
+        try:
+            logger.info(f"Merging {len(valid_paths)} chunks by streaming copy (no in-memory decode)...")
+            AudioBuilder._binary_merge_mp3(valid_paths, staging_path)
+            if os.path.getsize(staging_path) <= 0:
+                raise AudioBuilderError("La unión de bloques produjo un archivo vacío.")
 
-        if PYDUB_AVAILABLE and has_ffmpeg:
-            logger.info(f"Merging {len(valid_paths)} chunks using pydub (ffmpeg enabled)...")
-            try:
-                combined = AudioSegment.empty()
-                silence = AudioSegment.silent(duration=silence_duration_ms)
-
-                for i, path in enumerate(valid_paths):
-                    segment = AudioSegment.from_file(path)
-                    if i > 0:
-                        combined += silence
-                    combined += segment
-
-                if normalize_volume:
-                    logger.info("Normalizing output audiobook volume...")
-                    combined = normalize(combined)
-
-                # Build export tags for metadata embedding
-                export_tags = AudioBuilder._build_tags(metadata) if metadata else None
-                
-                # M4B is actually M4A with a different extension; ffmpeg uses 'ipod' format
-                if format_ext == "m4b":
-                    combined.export(
-                        output_path, format="ipod",
-                        codec="aac",
-                        tags=export_tags
-                    )
-                elif format_ext == "m4a":
-                    combined.export(
-                        output_path, format="ipod",
-                        codec="aac",
-                        tags=export_tags
-                    )
-                else:
-                    combined.export(
-                        output_path, format=format_ext,
-                        tags=export_tags
-                    )
-                    
-                logger.info(f"Audiobook successfully exported using pydub to: {output_path}")
-            except Exception as e:
-                logger.error(f"Pydub merging failed: {e}")
-                raise AudioBuilderError(f"Pydub merging failed: {e}")
-        else:
-            # Fallback when ffmpeg is missing or pydub is unavailable
             if format_ext == "mp3":
-                logger.info(f"Merging {len(valid_paths)} MP3 chunks using binary frame concatenation (no ffmpeg fallback)...")
-                try:
-                    AudioBuilder._binary_merge_mp3(valid_paths, output_path)
-                    logger.info(f"Audiobook successfully exported using binary fallback to: {output_path}")
-                except Exception as e:
-                    logger.error(f"Binary MP3 merging failed: {e}")
-                    raise AudioBuilderError(f"Binary merging failed: {e}")
-            else:
-                msg = (
-                    f"Cannot merge {format_ext} files without ffmpeg. "
-                    "Please install ffmpeg (brew install ffmpeg) or choose MP3 format."
+                os.replace(staging_path, output_path)
+                logger.info(f"Audiobook exported by stream copy to: {output_path}")
+                return
+
+            if not has_ffmpeg:
+                mp3_fallback = os.path.splitext(output_path)[0] + ".mp3"
+                os.replace(staging_path, mp3_fallback)
+                raise AudioBuilderError(
+                    f"No hay ffmpeg para convertir a {format_ext.upper()}. "
+                    f"El audio quedó guardado como MP3 en {mp3_fallback}"
                 )
-                logger.error(msg)
-                raise AudioBuilderError(msg)
+
+            AudioBuilder._ffmpeg_transcode(staging_path, output_path, format_ext, metadata)
+            logger.info(f"Audiobook transcoded with ffmpeg to: {output_path}")
+        finally:
+            if os.path.exists(staging_path):
+                try:
+                    os.remove(staging_path)
+                except OSError:
+                    pass
 
     @staticmethod
     def merge_chapter_files(
@@ -158,13 +114,14 @@ class AudioBuilder:
         os.makedirs(output_dir, exist_ok=True)
         created_files = []
         
+        from app.core.chapter_detector import ChapterDetector
+
+        total = len(chapter_audio_map)
         for idx, (chapter_name, chunk_paths) in enumerate(chapter_audio_map.items(), start=1):
-            # Sanitize chapter name for filename
-            safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in chapter_name).strip()
-            if not safe_name:
-                safe_name = f"capitulo_{idx:03d}"
-            
-            output_path = os.path.join(output_dir, f"{idx:03d}_{safe_name}.{format_ext}")
+            filename = ChapterDetector.sanitize_filename(
+                chapter_name, index=idx, total=total, ext=format_ext
+            )
+            output_path = os.path.join(output_dir, filename)
             
             chapter_meta = dict(metadata) if metadata else {}
             chapter_meta["track"] = str(idx)
@@ -183,7 +140,7 @@ class AudioBuilder:
                 logger.info(f"Chapter '{chapter_name}' exported to: {output_path}")
             except Exception as e:
                 logger.error(f"Failed to export chapter '{chapter_name}': {e}")
-                
+
         return created_files
 
     @staticmethod
@@ -218,11 +175,46 @@ class AudioBuilder:
 
     @staticmethod
     def _binary_merge_mp3(paths: List[str], output_path: str) -> None:
-        """Stitches MP3 files directly together at a binary level (supported by MP3 streaming format)."""
+        """Stitches MP3 files at a binary level without loading a whole chapter into RAM."""
+        bufsize = 256 * 1024
         try:
             with open(output_path, "wb") as outfile:
                 for path in paths:
                     with open(path, "rb") as infile:
-                        outfile.write(infile.read())
+                        while True:
+                            chunk = infile.read(bufsize)
+                            if not chunk:
+                                break
+                            outfile.write(chunk)
         except Exception as e:
             raise RuntimeError(f"Binary stream write error: {e}")
+
+    @staticmethod
+    def _ffmpeg_transcode(
+        source_mp3: str,
+        output_path: str,
+        format_ext: str,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Remux/transcode a already-concatenated MP3. ffmpeg streams; it does not hold PCM in Python."""
+        import subprocess
+
+        cmd = ["ffmpeg", "-y", "-i", source_mp3]
+        tags = AudioBuilder._build_tags(metadata) if metadata else {}
+        for key, value in tags.items():
+            cmd.extend(["-metadata", f"{key}={value}"])
+        if format_ext in ("m4a", "m4b"):
+            cmd.extend(["-c:a", "aac", "-b:a", "64k", output_path])
+        elif format_ext == "wav":
+            cmd.extend(["-c:a", "pcm_s16le", output_path])
+        else:
+            cmd.extend(["-c", "copy", output_path])
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise AudioBuilderError(f"ffmpeg transcode failed: {e.stderr[-800:] if e.stderr else e}")

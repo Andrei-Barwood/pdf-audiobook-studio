@@ -4,19 +4,22 @@ from typing import Dict, Any, List, Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
     QFileDialog, QComboBox, QSpinBox, QProgressBar, QMessageBox, 
-    QSplitter, QTextEdit, QFormLayout, QLineEdit, QListWidget, QListWidgetItem
+    QSplitter, QTextEdit, QFormLayout, QLineEdit, QListWidget, QListWidgetItem,
+    QCheckBox, QScrollArea,
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QSettings
 
 from app.gui.styles import DARK_THEME_QSS, LIGHT_THEME_QSS
 from app.gui.widgets import DragDropFrame, CardFrame, LogTerminal
 from app.core.pdf_extractor import PDFExtractor
 from app.core.chunker import TextChunker
+from app.core.chapter_detector import Chapter, ChapterDetector
 from app.core.project_manager import ProjectManager
 from app.core.tts_engine import get_tts_engine
 from app.core.job_runner import ConversionWorker
+from app.core.text_cleaner import TextCleaner
 from app.utils.logger import logger
-from app.utils.file_utils import clean_temp_dir
+from app.utils.file_utils import cached_audio_count, clean_temp_dir, destination_note
 
 class MainWindow(QMainWindow):
     """The central application window for PDF Audiobook Studio, integrating core pipelines and elegant styling."""
@@ -24,16 +27,20 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PDF Audiobook Studio")
-        self.resize(1100, 750)
-        self.setMinimumSize(950, 650)
+        self.resize(1000, 700)
+        self.setMinimumSize(750, 500)
         
         self.pdf_path: Optional[str] = None
         self.extractor: Optional[PDFExtractor] = None
         self.chunks: List[Dict[str, Any]] = []
         self.active_project: Optional[Dict[str, Any]] = None
         self.worker: Optional[ConversionWorker] = None
+        self.detected_chapters: List[Chapter] = []
+        
+        self.batch_queue: List[str] = []
         
         self.is_dark_theme = True
+        self.settings = QSettings("PDFAudiobookStudio", "PDFAudiobookStudio")
         
         self.setup_ui()
         self.apply_theme()
@@ -85,7 +92,13 @@ class MainWindow(QMainWindow):
         upper_layout.setSpacing(15)
         
         # Workspace Panel LEFT: Config Card
-        config_card = CardFrame(upper_area)
+        config_scroll = QScrollArea(upper_area)
+        config_scroll.setWidgetResizable(True)
+        config_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        
+        config_card = CardFrame()
+        config_scroll.setWidget(config_card)
+        
         config_layout = QVBoxLayout(config_card)
         config_layout.setContentsMargins(15, 15, 15, 15)
         config_layout.setSpacing(10)
@@ -107,7 +120,7 @@ class MainWindow(QMainWindow):
         
         # Upload Area
         self.upload_zone = DragDropFrame(config_card)
-        self.upload_zone.file_dropped.connect(self.load_pdf)
+        self.upload_zone.files_dropped.connect(self.load_pdf_batch)
         config_layout.addWidget(self.upload_zone)
         
         # File Metadata Form Panel
@@ -150,16 +163,51 @@ class MainWindow(QMainWindow):
         range_layout.addWidget(QLabel("Hasta:"))
         range_layout.addWidget(self.spn_end_page)
         settings_form.addRow("Rango de páginas:", range_layout)
+        self.spn_start_page.valueChanged.connect(self.refresh_chapter_list)
+        self.spn_end_page.valueChanged.connect(self.refresh_chapter_list)
+
+        self.chk_split_chapters = QCheckBox(
+            "Un archivo por capítulo (según el índice)",
+            config_card,
+        )
+        self.chk_split_chapters.setChecked(self.settings.value("split_by_chapter", True, type=bool))
+        self.chk_split_chapters.setToolTip(
+            "Lee el índice del PDF y exporta una carpeta con un audio por parte o capítulo. "
+            "Si el índice mezcla secciones, se agrupa por PARTES / capítulos."
+        )
+        self.chk_split_chapters.toggled.connect(self.on_split_chapters_toggled)
+        settings_form.addRow("Capítulos:", self.chk_split_chapters)
+
+        self.lbl_chapters = QLabel("Carga un PDF para detectar el índice.", config_card)
+        self.lbl_chapters.setWordWrap(True)
+        settings_form.addRow("", self.lbl_chapters)
+
+        self.lst_chapters = QListWidget(config_card)
+        self.lst_chapters.setMaximumHeight(130)
+        self.lst_chapters.setVisible(False)
+        settings_form.addRow("", self.lst_chapters)
         
         # TTS Engine selector
         self.cmb_engine = QComboBox(config_card)
-        self.cmb_engine.addItems(["Edge-TTS (Alta Calidad)", "pyttsx3 (Offline Local)", "gTTS (Google Online)"])
+        self.cmb_engine.addItems(["Edge-TTS (Alta Calidad)", "Google AI Pro / Cloud TTS 👑", "pyttsx3 (Offline Local)", "gTTS (Google Online)"])
         self.cmb_engine.currentIndexChanged.connect(self.populate_voices)
         settings_form.addRow("Motor de Voz:", self.cmb_engine)
         
         # Voice Dropdown
         self.cmb_voices = QComboBox(config_card)
         settings_form.addRow("Voz / Idioma:", self.cmb_voices)
+
+        self.chk_omit_symbols = QCheckBox(
+            "Omitir símbolos (Elena no dirá asterisco, barra, almohadilla…)",
+            config_card,
+        )
+        self.chk_omit_symbols.setChecked(self.settings.value("omit_symbols", True, type=bool))
+        self.chk_omit_symbols.setToolTip(
+            "Las voces de Edge, sobre todo Elena, pronuncian los símbolos. "
+            "Actívalo para silenciarlos y dejar solo el texto."
+        )
+        self.chk_omit_symbols.toggled.connect(self.on_omit_symbols_toggled)
+        settings_form.addRow("Lectura:", self.chk_omit_symbols)
         
         # Speed Slider scale
         self.cmb_speed = QComboBox(config_card)
@@ -183,7 +231,7 @@ class MainWindow(QMainWindow):
         settings_form.addRow("Destino:", folder_layout)
         
         config_layout.addLayout(settings_form)
-        upper_layout.addWidget(config_card)
+        upper_layout.addWidget(config_scroll)
         
         # Workspace Panel RIGHT: Preview Card
         preview_card = CardFrame(upper_area)
@@ -301,15 +349,33 @@ class MainWindow(QMainWindow):
 
     def trigger_file_dialog(self) -> None:
         """Opens native file browse window for PDF uploads."""
-        file_path, _ = QFileDialog.getOpenFileName(self, "Seleccionar archivo PDF", "", "Documentos PDF (*.pdf)")
-        if file_path:
-            self.load_pdf(file_path)
+        file_paths, _ = QFileDialog.getOpenFileNames(self, "Seleccionar archivo(s) PDF", "", "Documentos PDF (*.pdf)")
+        if file_paths:
+            self.load_pdf_batch(file_paths)
+
+    def load_pdf_batch(self, file_paths: List[str]) -> None:
+        """Handles a batch of dropped or selected PDFs."""
+        if not file_paths:
+            return
+            
+        # Clear any existing batch queue
+        self.batch_queue = file_paths[1:]
+        
+        # Load the first one into the UI
+        self.load_pdf(file_paths[0])
+        
+        if self.batch_queue:
+            self.log_terminal.append_log(f"Lote detectado: {len(self.batch_queue)} PDF(s) en cola. Se procesarán automáticamente con la misma configuración.")
+            self.lbl_pdf_name.setText(f"{self.lbl_pdf_name.text()} (+ {len(self.batch_queue)} en cola)")
 
     def browse_output_dir(self) -> None:
         """Opens native directory dialog to choose output path."""
         dir_path = QFileDialog.getExistingDirectory(self, "Seleccionar Carpeta de Destino")
         if dir_path:
             self.txt_output_dir.setText(dir_path)
+            note = destination_note(dir_path)
+            if note:
+                self.log_terminal.append_log(note)
 
     def load_pdf(self, file_path: str) -> None:
         """Reads PDF metadata and updates form visuals."""
@@ -341,13 +407,8 @@ class MainWindow(QMainWindow):
             self.spn_end_page.setMaximum(meta["page_count"])
             self.spn_end_page.setValue(meta["page_count"])
             
-            # Populate text preview (first 2 pages)
-            preview_text = ""
-            for i in range(min(meta["page_count"], 2)):
-                preview_text += f"--- PÁGINA {i+1} ---\n"
-                preview_text += self.extractor.extract_page_text(i) + "\n\n"
-            
-            self.txt_preview.setPlainText(preview_text.strip() or "[Sin texto extraíble en las primeras páginas]")
+            self.refresh_preview()
+            self.detect_chapters()
             
             # Set default output dir if empty
             if not self.txt_output_dir.text():
@@ -365,6 +426,119 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error de Lectura", f"No se pudo cargar el PDF:\n{e}")
             self.lbl_pdf_name.setText("Error al cargar archivo")
 
+    def on_split_chapters_toggled(self, checked: bool) -> None:
+        """Persists the per-chapter export preference."""
+        self.settings.setValue("split_by_chapter", checked)
+        self.refresh_chapter_list()
+        if checked:
+            n = len(self.visible_chapters())
+            if n >= 2:
+                self.log_terminal.append_log(
+                    f"Exportación por capítulos activada: {n} archivos de audio."
+                )
+            else:
+                self.log_terminal.append_log(
+                    "Exportación por capítulos activada. Se buscarán encabezados al convertir si el PDF no trae índice."
+                )
+        else:
+            self.log_terminal.append_log("Se exportará un único archivo de audio.")
+
+    def detect_chapters(self) -> None:
+        """Read the PDF outline and show detected parts/chapters."""
+        self.detected_chapters = []
+        if not self.pdf_path:
+            self.refresh_chapter_list()
+            return
+        try:
+            detector = ChapterDetector(pdf_path=self.pdf_path)
+            chapters = detector.detect()
+            if len(chapters) >= 2 and not (
+                len(chapters) == 1 and chapters[0].title == "Full Document"
+            ):
+                self.detected_chapters = chapters
+                first = chapters[0]
+                self.log_terminal.append_log(
+                    f"Índice: {len(chapters)} partes/capítulos "
+                    f"(pág. {first.start_page}–{chapters[-1].end_page})."
+                )
+                if first.start_page > 1:
+                    self.log_terminal.append_log(
+                        f"Las páginas 1–{first.start_page - 1} (portada/índice impreso) no se leen."
+                    )
+            else:
+                self.detected_chapters = []
+                self.log_terminal.append_log(
+                    "Este PDF no tiene un índice de capítulos reconocible. Se puede exportar un solo archivo."
+                )
+        except Exception as e:
+            logger.warning(f"Chapter detection failed: {e}")
+            self.detected_chapters = []
+        self.refresh_chapter_list()
+
+    def visible_chapters(self) -> List[Chapter]:
+        """Chapters overlapping the selected page range."""
+        if not self.detected_chapters:
+            return []
+        return ChapterDetector.clip_to_range(
+            self.detected_chapters,
+            self.spn_start_page.value(),
+            self.spn_end_page.value(),
+        )
+
+    def refresh_chapter_list(self) -> None:
+        """Refresh the chapter list widget for the current page range."""
+        if not hasattr(self, "lst_chapters"):
+            return
+        self.lst_chapters.clear()
+        visible = self.visible_chapters()
+        if visible:
+            first = visible[0]
+            last = visible[-1]
+            self.lbl_chapters.setText(
+                f"{len(visible)} archivos · pág. {first.start_page}–{last.end_page}"
+            )
+            self.lst_chapters.setVisible(True)
+            for i, chapter in enumerate(visible, start=1):
+                self.lst_chapters.addItem(
+                    f"{i:02d}.  {chapter.start_page}–{chapter.end_page}  {chapter.title}"
+                )
+        elif self.detected_chapters:
+            self.lbl_chapters.setText("Ningún capítulo cae en el rango de páginas seleccionado.")
+            self.lst_chapters.setVisible(False)
+        else:
+            self.lbl_chapters.setText(
+                "Sin índice estructurado. Si activas capítulos, se buscarán encabezados al convertir."
+            )
+            self.lst_chapters.setVisible(False)
+
+    def on_omit_symbols_toggled(self, checked: bool) -> None:
+        """Persists the omit-symbols preference and refreshes the spoken-text preview."""
+        self.settings.setValue("omit_symbols", checked)
+        if self.extractor:
+            self.refresh_preview()
+        self.log_terminal.append_log(
+            "Omitir símbolos activado. Elena no pronunciará asteriscos ni barras."
+            if checked
+            else "Omitir símbolos desactivado. La voz leerá los símbolos del PDF."
+        )
+
+    def refresh_preview(self) -> None:
+        """Rebuilds the preview using the same cleaning the TTS pipeline will hear."""
+        if not self.extractor:
+            return
+        meta = self.extractor.get_metadata()
+        omit = self.chk_omit_symbols.isChecked()
+        preview_text = ""
+        for i in range(min(meta["page_count"], 2)):
+            preview_text += f"--- PÁGINA {i+1} ---\n"
+            preview_text += TextCleaner.clean(
+                self.extractor.extract_page_text(i),
+                omit_symbols=omit,
+            ) + "\n\n"
+        self.txt_preview.setPlainText(
+            preview_text.strip() or "[Sin texto extraíble en las primeras páginas]"
+        )
+
     def populate_voices(self) -> None:
         """Fetches dynamic voice lists depending on TTS selection."""
         self.cmb_voices.clear()
@@ -373,6 +547,8 @@ class MainWindow(QMainWindow):
         if idx == 0:
             engine_name = "edge-tts"
         elif idx == 1:
+            engine_name = "google"
+        elif idx == 2:
             engine_name = "pyttsx3"
         else:
             engine_name = "gtts"
@@ -416,11 +592,14 @@ class MainWindow(QMainWindow):
             return
             
         self.load_pdf(pdf_path)
+        self.batch_queue = []
         self.active_project = project
         self.txt_output_dir.setText(project["output_dir"])
+        if "split_by_chapter" in project.keys():
+            self.chk_split_chapters.setChecked(bool(project["split_by_chapter"]))
         
         # Select engine matching
-        engine_map = {"edge-tts": 0, "pyttsx3": 1, "gtts": 2}
+        engine_map = {"edge-tts": 0, "google": 1, "google-tts": 1, "google-cloud": 1, "pyttsx3": 2, "gtts": 3}
         self.cmb_engine.setCurrentIndex(engine_map.get(project["engine_type"], 0))
         self.populate_voices()
         
@@ -454,12 +633,15 @@ class MainWindow(QMainWindow):
         if not output_dir or not os.path.exists(output_dir):
             QMessageBox.warning(self, "Carpeta de destino", "Por favor seleccione una carpeta de salida válida.")
             return
+        note = destination_note(output_dir)
+        if note:
+            self.log_terminal.append_log(note)
 
         start_page = self.spn_start_page.value() - 1 # 0-indexed
         end_page = self.spn_end_page.value() - 1     # 0-indexed
         
         idx = self.cmb_engine.currentIndex()
-        engine_type = "edge-tts" if idx == 0 else ("pyttsx3" if idx == 1 else "gtts")
+        engine_type = "edge-tts" if idx == 0 else ("google" if idx == 1 else ("pyttsx3" if idx == 2 else "gtts"))
         voice_id = self.cmb_voices.currentData()
         
         # Parse speed value
@@ -467,8 +649,13 @@ class MainWindow(QMainWindow):
         rate = speed_map.get(self.cmb_speed.currentIndex(), 1.0)
         
         format_ext = self.cmb_format.currentText().lower()
+        omit_symbols = self.chk_omit_symbols.isChecked()
+        split_by_chapter = self.chk_split_chapters.isChecked()
         pdf_name_noext = os.path.splitext(os.path.basename(self.pdf_path))[0]
-        output_file = os.path.join(output_dir, f"{pdf_name_noext}_audiolibro.{format_ext}")
+        if split_by_chapter:
+            output_file = os.path.join(output_dir, f"{pdf_name_noext}_audiolibro")
+        else:
+            output_file = os.path.join(output_dir, f"{pdf_name_noext}_audiolibro.{format_ext}")
 
         # Check if project exists already, otherwise create new
         if not self.active_project or self.active_project["pdf_path"] != self.pdf_path:
@@ -480,8 +667,68 @@ class MainWindow(QMainWindow):
                     text = self.extractor.extract_page_text(i)
                     pages_data.append({"page_num": i, "raw_text": text})
 
-                # Chunk pages (limit to 1800 characters per chunk)
-                self.chunks = TextChunker.chunk_pages(pages_data, max_chars=1800)
+                chapters_for_split: List[Chapter] = []
+                if split_by_chapter:
+                    chapters_for_split = self.visible_chapters()
+                    if len(chapters_for_split) < 2:
+                        heuristic = ChapterDetector(
+                            pdf_path=self.pdf_path,
+                            page_texts=[
+                                {"page_num": p["page_num"], "text": p["raw_text"]}
+                                for p in pages_data
+                            ],
+                            total_pages=end_page + 1,
+                        ).detect()
+                        chapters_for_split = ChapterDetector.clip_to_range(
+                            heuristic, start_page + 1, end_page + 1
+                        )
+                        if len(chapters_for_split) < 2 or (
+                            len(chapters_for_split) == 1
+                            and chapters_for_split[0].title == "Full Document"
+                        ):
+                            split_by_chapter = False
+                            chapters_for_split = []
+                            output_file = os.path.join(
+                                output_dir, f"{pdf_name_noext}_audiolibro.{format_ext}"
+                            )
+                            self.log_terminal.append_log(
+                                "No se encontraron capítulos. Se exportará un único archivo."
+                            )
+
+                if split_by_chapter and chapters_for_split:
+                    self.chunks = []
+                    chunk_idx = 0
+                    for chapter_i, chapter in enumerate(chapters_for_split):
+                        slice_pages = [
+                            p for p in pages_data
+                            if chapter.start_page <= p["page_num"] + 1 <= (chapter.end_page or end_page + 1)
+                        ]
+                        chapter_chunks = TextChunker.chunk_pages(
+                            slice_pages, max_chars=1800, omit_symbols=omit_symbols
+                        )
+                        if not chapter_chunks:
+                            self.log_terminal.append_log(
+                                f"Sin texto sintetizable en «{chapter.title}»; se omite."
+                            )
+                            continue
+                        for chunk in chapter_chunks:
+                            chunk["chunk_index"] = chunk_idx
+                            chunk["chapter_index"] = chapter_i
+                            chunk["chapter_title"] = chapter.title
+                            self.chunks.append(chunk)
+                            chunk_idx += 1
+                    self.log_terminal.append_log(
+                        f"Texto agrupado en {len(chapters_for_split)} capítulos "
+                        f"({len(self.chunks)} bloques)."
+                    )
+                else:
+                    self.chunks = TextChunker.chunk_pages(
+                        pages_data, max_chars=1800, omit_symbols=omit_symbols
+                    )
+                if omit_symbols:
+                    self.log_terminal.append_log(
+                        "Símbolos omitidos en el texto: Elena no pronunciará asterisco, barra ni almohadilla."
+                    )
                 
                 if not self.chunks:
                     QMessageBox.warning(self, "Sin texto", "El rango seleccionado no contiene ningún texto para sintetizar.")
@@ -496,7 +743,8 @@ class MainWindow(QMainWindow):
                     engine_type=engine_type,
                     voice_id=str(voice_id),
                     rate=rate,
-                    format_ext=format_ext
+                    format_ext=format_ext,
+                    split_by_chapter=split_by_chapter,
                 )
                 
                 # Add chunks to DB
@@ -516,6 +764,8 @@ class MainWindow(QMainWindow):
         self.cmb_voices.setEnabled(False)
         self.cmb_format.setEnabled(False)
         self.cmb_speed.setEnabled(False)
+        self.chk_omit_symbols.setEnabled(False)
+        self.chk_split_chapters.setEnabled(False)
         self.spn_start_page.setEnabled(False)
         self.spn_end_page.setEnabled(False)
         
@@ -525,7 +775,9 @@ class MainWindow(QMainWindow):
             voice_id=str(voice_id),
             rate=rate,
             format_ext=format_ext,
-            output_file=output_file
+            output_file=output_file,
+            omit_symbols=omit_symbols,
+            split_by_chapter=split_by_chapter,
         )
         
         # Connect signals
@@ -582,6 +834,21 @@ class MainWindow(QMainWindow):
 
     def clear_temp_cache(self) -> None:
         """Safe execution trigger to clear out disk cached chunks."""
+        n = cached_audio_count()
+        if n > 0:
+            reply = QMessageBox.question(
+                self,
+                "¿Borrar la caché de audio?",
+                (
+                    f"Hay {n} archivos de audio en la caché. "
+                    "Si un libro largo falló al copiarse al USB, esos bloques SON el trabajo de todo el día. "
+                    "Borrarlos obliga a sintetizar otra vez.\n\n¿Borrar de todos modos?"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
         clean_temp_dir()
         self.log_terminal.append_log("La caché de bloques de audio temporales ha sido limpiada.")
         QMessageBox.information(self, "Limpieza de Caché", "La carpeta de caché temporal ha sido limpiada exitosamente.")
@@ -623,22 +890,34 @@ class MainWindow(QMainWindow):
         self.cmb_voices.setEnabled(True)
         self.cmb_format.setEnabled(True)
         self.cmb_speed.setEnabled(True)
+        self.chk_omit_symbols.setEnabled(True)
+        self.chk_split_chapters.setEnabled(True)
         self.spn_start_page.setEnabled(True)
         self.spn_end_page.setEnabled(True)
         
         if success:
-            QMessageBox.information(self, "Conversión Completada", result_msg)
             self.progress_bar.setValue(100)
             self.lbl_progress_percent.setText("100%")
-            self.log_terminal.append_log("Proceso finalizado. Todo el audio ha sido ensamblado.")
+            self.log_terminal.append_log("Proceso finalizado para este documento. Todo el audio ha sido ensamblado.")
+            self.active_project = None
+            
+            if self.batch_queue:
+                next_pdf = self.batch_queue.pop(0)
+                self.log_terminal.append_log(f"Iniciando el siguiente documento en la cola: {os.path.basename(next_pdf)}")
+                self.load_pdf(next_pdf)
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(500, self.start_conversion)
+            else:
+                QMessageBox.information(self, "Conversión Completada", result_msg)
         else:
             QMessageBox.warning(self, "Conversión Incompleta", f"El proceso terminó con advertencias o fallos:\n{result_msg}")
             self.log_terminal.append_log(f"Proceso detenido: {result_msg}")
+            self.log_terminal.append_log(
+                "El proyecto sigue cargado. Pulsa Iniciar para reanudar; no borres la caché."
+            )
             
         self.load_recent_projects()
         self.worker = None
-        # Reset active project so if they hit start again, it registers clean configurations
-        self.active_project = None
         
     def closeEvent(self, event) -> None:
         """Intercepts window close to safely shut down running worker threads."""

@@ -1,10 +1,12 @@
 import os
 import time
+from collections import OrderedDict
 from typing import Dict, Any, List, Optional
 from PySide6.QtCore import QThread, Signal
 from app.core.project_manager import ProjectManager
 from app.core.tts_engine import get_tts_engine
 from app.core.audio_builder import AudioBuilder
+from app.core.text_cleaner import TextCleaner
 from app.utils.logger import logger
 from app.utils.file_utils import get_temp_dir
 from app.utils.errors import AudiobookStudioError
@@ -26,6 +28,8 @@ class ConversionWorker(QThread):
         rate: float,
         format_ext: str,
         output_file: str,
+        omit_symbols: bool = True,
+        split_by_chapter: bool = False,
         parent=None
     ):
         super().__init__(parent)
@@ -35,6 +39,8 @@ class ConversionWorker(QThread):
         self.rate = rate
         self.format_ext = format_ext.lower().strip(".")
         self.output_file = output_file
+        self.omit_symbols = omit_symbols
+        self.split_by_chapter = split_by_chapter
         
         self._is_paused = False
         self._is_canceled = False
@@ -101,7 +107,12 @@ class ConversionWorker(QThread):
                     time.sleep(0.2)
 
                 # Retrieve current chunk parameters
-                clean_text = chunk["clean_text"]
+                stored_text = chunk["clean_text"]
+                clean_text = (
+                    TextCleaner.omit_spoken_symbols(stored_text)
+                    if self.omit_symbols
+                    else stored_text
+                )
                 db_status = chunk["status"]
                 cached_audio_path = chunk["audio_path"]
                 page_num = chunk["page_number"]
@@ -110,8 +121,11 @@ class ConversionWorker(QThread):
                 temp_filename = f"{self.project_id}_chunk_{chunk_index}.{self.format_ext}"
                 temp_audio_path = os.path.join(temp_cache_dir, temp_filename)
 
+                # Re-synthesize if the stored text still contains glyphs Elena would read
+                cache_matches_spoken = (not self.omit_symbols) or (clean_text == stored_text)
+
                 # Check cache: if completed database record exists and file is physically valid, skip synthesis!
-                if db_status == "COMPLETED" and cached_audio_path and os.path.exists(cached_audio_path) and os.path.getsize(cached_audio_path) > 0:
+                if cache_matches_spoken and db_status == "COMPLETED" and cached_audio_path and os.path.exists(cached_audio_path) and os.path.getsize(cached_audio_path) > 0:
                     logger.info(f"Chunk {chunk_index} loaded from local cache: {cached_audio_path}")
                     completed_audio_paths[chunk_index] = cached_audio_path
                     
@@ -122,7 +136,15 @@ class ConversionWorker(QThread):
                     continue
 
                 # Synthesize chunk with automatic retries
-                self.status_changed.emit(f"Sintetizando bloque {chunk_index + 1} de {total_chunks} (Pág. {page_num})...")
+                chapter_label = chunk.get("chapter_title")
+                if chapter_label:
+                    status = (
+                        f"Sintetizando bloque {chunk_index + 1} de {total_chunks} "
+                        f"· {chapter_label} (pág. {page_num})..."
+                    )
+                else:
+                    status = f"Sintetizando bloque {chunk_index + 1} de {total_chunks} (Pág. {page_num})..."
+                self.status_changed.emit(status)
                 ProjectManager.update_chunk_status(self.project_id, chunk_index, "PROCESSING")
                 
                 success = False
@@ -183,6 +205,53 @@ class ConversionWorker(QThread):
             if not final_audio_segments:
                 raise AudiobookStudioError("Todos los bloques de audio fallaron. No hay archivos que unir.")
 
+            failed_count = total_chunks - len(final_audio_segments)
+
+            if self.split_by_chapter:
+                self.status_changed.emit("Exportando un archivo de audio por capítulo...")
+                logger.info("Merging audio into per-chapter files...")
+                groups: "OrderedDict[int, List[str]]" = OrderedDict()
+                titles: Dict[int, str] = {}
+                for chunk in chunks:
+                    chapter_idx = chunk.get("chapter_index")
+                    if chapter_idx is None:
+                        chapter_idx = 0
+                    titles.setdefault(
+                        chapter_idx,
+                        chunk.get("chapter_title") or f"Capítulo {int(chapter_idx) + 1}",
+                    )
+                    path = completed_audio_paths[chunk["chunk_index"]]
+                    if path:
+                        groups.setdefault(chapter_idx, []).append(path)
+
+                if not groups:
+                    raise AudiobookStudioError("No hay audio que agrupar por capítulo.")
+
+                os.makedirs(self.output_file, exist_ok=True)
+                chapter_map = OrderedDict(
+                    (titles[idx], paths) for idx, paths in groups.items()
+                )
+                created = AudioBuilder.merge_chapter_files(
+                    chapter_audio_map=chapter_map,
+                    output_dir=self.output_file,
+                    format_ext=self.format_ext,
+                )
+                if not created:
+                    raise AudiobookStudioError(
+                        "No se pudo exportar ningún capítulo. "
+                        "La caché de bloques no se borra sola: no pulses «Limpiar caché»."
+                    )
+                status = "COMPLETED" if len(created) == len(chapter_map) else "FAILED"
+                ProjectManager.update_project_status(self.project_id, status)
+                omitted = f" ({failed_count} bloques omitidos)." if failed_count else ""
+                missing = len(chapter_map) - len(created)
+                failed_ch = f" Fallaron {missing} capítulos." if missing else ""
+                summary = (
+                    f"{len(created)} archivos de audio en {self.output_file}{omitted}{failed_ch}"
+                )
+                self.finished.emit(missing == 0, summary)
+                return
+
             # 3. Assemble Audio
             self.status_changed.emit("Procesando y uniendo archivos finales...")
             logger.info("Starting audio concatenation of completed chunks...")
@@ -195,7 +264,6 @@ class ConversionWorker(QThread):
 
             ProjectManager.update_project_status(self.project_id, "COMPLETED")
             
-            failed_count = total_chunks - len(final_audio_segments)
             if failed_count > 0:
                 summary = f"Audiolibro creado con éxito en {self.output_file} ({failed_count} bloques omitidos debido a fallos)."
             else:

@@ -1,0 +1,43 @@
+name: PDFAudiobookStudio
+options:
+  bundleIdPrefix: com.pdfaudiobookstudio
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ALWAYS_SEARCH_USER_PATHS: NO
+    CLANG_ENABLE_MODULES: YES
+    CLANG_ENABLE_OBJC_ARC: YES
+targets:
+  PDFAudiobookStudio:
+    type: application
+    platform: macOS
+    sources:
+      - path: PDFAudiobookStudio
+        excludes:
+          - "**/.DS_Store"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pdfaudiobookstudio.app
+        PRODUCT_NAME: PDF Audiobook Studio
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: PDFAudiobookStudio/Info.plist
+        CODE_SIGN_ENTITLEMENTS: PDFAudiobookStudio/PDFAudiobookStudio.entitlements
+        GENERATE_INFOPLIST_FILE: false
+        COMBINE_HIDPI_IMAGES: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_APP_SANDBOX: NO
+        SWIFT_EMIT_LOC_STRINGS: YES
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        COMBINE_HIDPI_IMAGES: YES
+        DEAD_CODE_STRIPPING: YES
+        STRING_CATALOG_GENERATE_SYMBOLS: NO
+    scheme:
+      testTargets: []

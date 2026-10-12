@@ -89,6 +89,31 @@ _CHAPTER_KEYWORD_PATTERNS: List[re.Pattern] = [
     ),
 ]
 
+# Major structural units in a TOC. Prefer these over dumping every level-1 bookmark
+# (some books, like multi-part treatises, mark sections and subsections as level 1).
+_MAJOR_HEADING = re.compile(
+    r"^\s*(?:"
+    r"parte\s+(?:\d+|[ivxlcdm]+)|"
+    r"part\s+(?:\d+|[ivxlcdm]+)|"
+    r"cap[íi]tulo\s+(?:\d+|[ivxlcdm]+)|"
+    r"chapter\s+(?:\d+|[ivxlcdm]+)|"
+    r"libro\s+(?:\d+|[ivxlcdm]+)|"
+    r"book\s+(?:\d+|[ivxlcdm]+)|"
+    r"secci[oó]n\s+(?:\d+|[ivxlcdm]+)|"
+    r"volumen\s+(?:\d+|[ivxlcdm]+)|"
+    r"volume\s+(?:\d+|[ivxlcdm]+)|"
+    r"ap[eé]ndice(?:\s|$)|"
+    r"appendix(?:\s|$)"
+    r")",
+    re.IGNORECASE,
+)
+
+_INDEX_TITLE = re.compile(
+    r"^\s*(índice(?:\s+general)?|indice(?:\s+general)?|"
+    r"tabla de contenidos|table of contents|contents|toc)\s*$",
+    re.IGNORECASE,
+)
+
 # Numbered headings at line start: "1.", "2.", "10." (but not "1.5" — must end line or have title)
 _NUMBERED_HEADING = re.compile(
     r"^\s*(\d{1,3})\.\s+(.{2,80})\s*$"
@@ -164,7 +189,8 @@ class ChapterDetector:
         """Run chapter detection and return the resulting chapter list.
 
         Strategy:
-        1. Attempt TOC-based detection via PyMuPDF.
+        1. Attempt TOC-based detection via PyMuPDF, preferring PARTES/capítulos
+           when the outline flattens every heading to the same level.
         2. If no TOC entries are found, fall back to regex heuristics.
         3. If neither yields results, treat the entire document as one chapter.
         """
@@ -172,7 +198,7 @@ class ChapterDetector:
 
         # Strategy 1 — structured TOC
         chapters = self._detect_from_toc()
-        if chapters:
+        if len(chapters) >= 2:
             logger.info(f"Detected {len(chapters)} chapter(s) from PDF Table of Contents.")
             self._chapters = chapters
             return self._chapters
@@ -180,7 +206,7 @@ class ChapterDetector:
         # Strategy 2 — regex heuristics
         if self.page_texts:
             chapters = self._detect_from_text()
-            if chapters:
+            if len(chapters) >= 2:
                 logger.info(f"Detected {len(chapters)} chapter(s) via text heuristics.")
                 self._chapters = chapters
                 return self._chapters
@@ -235,23 +261,103 @@ class ChapterDetector:
             logger.error(f"Failed to write chapter JSON: {exc}")
             raise ChapterDetectionError(f"Could not write chapter JSON: {exc}")
 
+    @staticmethod
+    def clip_to_range(
+        chapters: List[Chapter],
+        start_page: int,
+        end_page: int,
+    ) -> List[Chapter]:
+        """Keep chapters that overlap ``start_page…end_page`` (1-indexed, inclusive)."""
+        clipped: List[Chapter] = []
+        for chapter in chapters:
+            last = chapter.end_page if chapter.end_page is not None else end_page
+            start = max(chapter.start_page, start_page)
+            end = min(last, end_page)
+            if start <= end:
+                clipped.append(Chapter(title=chapter.title, start_page=start, end_page=end))
+        return clipped
+
+    @staticmethod
+    def sanitize_filename(title: str, index: int, total: int, ext: str) -> str:
+        """Build a filesystem-safe ``01_Titulo.mp3`` name."""
+        width = 3 if total >= 100 else 2
+        safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in (title or ""))
+        safe = re.sub(r"[\s_]+", "_", safe).strip("._ ")
+        if len(safe) > 72:
+            safe = safe[:72].rstrip("._ ")
+        if not safe:
+            safe = f"capitulo_{index}"
+        return f"{index:0{width}d}_{safe}.{ext.lstrip('.')}"
+
+    @staticmethod
+    def chapters_from_toc(toc: List[list], total_pages: int) -> List[Chapter]:
+        """Turn a PyMuPDF-style TOC (``[level, title, page]``) into chapters.
+
+        When the outline contains two or more PARTES / capítulos / chapters,
+        those become the split points even if the PDF marked every subsection
+        as the same bookmark level.
+        """
+        cleaned: List[tuple] = []
+        for entry in toc or []:
+            if not entry or len(entry) < 3:
+                continue
+            level, title, page = entry[0], (entry[1] or "").strip(), int(entry[2] or 1)
+            if not title or _INDEX_TITLE.match(title):
+                continue
+            cleaned.append((level, title, max(1, page)))
+
+        if not cleaned:
+            return []
+
+        majors = [item for item in cleaned if _MAJOR_HEADING.match(item[1])]
+        if len(majors) >= 2:
+            logger.info(
+                f"TOC has {len(cleaned)} bookmarks; splitting on {len(majors)} "
+                "major headings (PARTE / capítulo / chapter)."
+            )
+            selected = majors
+        else:
+            min_level = min(item[0] for item in cleaned)
+            selected = [item for item in cleaned if item[0] == min_level]
+
+        return ChapterDetector._entries_to_chapters(selected, total_pages)
+
+    @staticmethod
+    def _entries_to_chapters(entries: List[tuple], total_pages: int) -> List[Chapter]:
+        """Convert ``(level, title, page)`` rows into chapters with end pages."""
+        unique: List[tuple] = []
+        for item in entries:
+            if unique and unique[-1][1] == item[1] and unique[-1][2] == item[2]:
+                continue
+            unique.append(item)
+
+        chapters: List[Chapter] = []
+        for idx, (_level, title, page) in enumerate(unique):
+            title = title.strip() if title else f"Capítulo {idx + 1}"
+            if idx + 1 < len(unique):
+                next_page = unique[idx + 1][2]
+                end_page = next_page - 1 if next_page > page else page
+            else:
+                end_page = total_pages or page
+            page = max(1, page)
+            end_page = max(page, end_page)
+            chapters.append(Chapter(title=title, start_page=page, end_page=end_page))
+        return chapters
+
     # ------------------------------------------------------------------
     # Strategy 1 — TOC-based detection
     # ------------------------------------------------------------------
 
     def _detect_from_toc(self) -> List[Chapter]:
-        """Extract chapters from the PDF's embedded Table of Contents.
-
-        PyMuPDF ``doc.get_toc()`` returns entries of the form
-        ``[level, title, page_number]``.  We consider only top-level entries
-        (level == 1) and optionally level-2 when level-1 is absent.
-        """
+        """Extract chapters from the PDF's embedded Table of Contents."""
         if not self.pdf_path or not PYMUPDF_AVAILABLE:
             return []
 
         try:
             doc = fitz.open(self.pdf_path)
             toc: List[list] = doc.get_toc()
+            if not self.total_pages:
+                self.total_pages = len(doc)
             doc.close()
         except Exception as exc:
             logger.warning(f"TOC extraction failed: {exc}")
@@ -261,33 +367,7 @@ class ChapterDetector:
             logger.debug("PDF has no embedded Table of Contents.")
             return []
 
-        # Determine the shallowest level present
-        min_level = min(entry[0] for entry in toc)
-
-        # Filter to top-level entries only
-        top_entries = [entry for entry in toc if entry[0] == min_level]
-
-        if not top_entries:
-            return []
-
-        chapters: List[Chapter] = []
-        for idx, entry in enumerate(top_entries):
-            _level, title, page = entry[0], entry[1], entry[2]
-            title = title.strip() if title else f"Chapter {idx + 1}"
-
-            # Determine end page: start of next chapter − 1, or last page
-            if idx + 1 < len(top_entries):
-                end_page = top_entries[idx + 1][2] - 1
-            else:
-                end_page = self.total_pages
-
-            # Clamp to valid range
-            page = max(1, page)
-            end_page = max(page, end_page)
-
-            chapters.append(Chapter(title=title, start_page=page, end_page=end_page))
-
-        return chapters
+        return self.chapters_from_toc(toc, self.total_pages)
 
     # ------------------------------------------------------------------
     # Strategy 2 — Regex-based heuristic detection

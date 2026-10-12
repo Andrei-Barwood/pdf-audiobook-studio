@@ -74,6 +74,16 @@ class PDFExtractor:
             logger.error(f"Failed to extract metadata: {e}")
             raise PDFExtractionError(f"Error reading PDF metadata: {e}")
 
+    def get_toc(self) -> List[list]:
+        """Return the embedded outline as ``[level, title, page]`` rows."""
+        if not self._doc:
+            return []
+        try:
+            return self._doc.get_toc() or []
+        except Exception as e:
+            logger.warning(f"Could not read PDF outline: {e}")
+            return []
+
     def extract_page_text(self, page_num: int) -> str:
         """Extracts raw text from a specific page (0-indexed)."""
         if not self._doc:

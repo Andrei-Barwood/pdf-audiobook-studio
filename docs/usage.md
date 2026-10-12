@@ -27,6 +27,13 @@ Por defecto, la aplicación cargará todo el rango de páginas (desde la página
 - Ajusta el valor del control **"Hasta"** (por ejemplo, página 50).
 - La aplicación solo extraerá y sintetizará el texto comprendido dentro de ese intervalo.
 
+### Paso 2b: Un archivo por capítulo
+Si el PDF incluye un índice (marcadores o encabezados tipo *Capítulo* / *PARTE*), activa **Un archivo por capítulo**. En lugar de un solo audiolibro, la app crea una carpeta `Nombre_audiolibro/` con un archivo por parte o capítulo (`01_PARTE_0_….mp3`, `02_PARTE_I_….mp3`, …).
+
+- Los índices densos (miles de epígrafes al mismo nivel) se agrupan por PARTES o capítulos, no por cada subsección.
+- Las páginas del índice impreso anteriores al primer capítulo no se leen.
+- El rango de páginas recorta qué capítulos se exportan.
+
 ### Paso 3: Selección del Motor de Voz y Parámetros
 - **Motor de Voz:** Te recomendamos firmemente seleccionar la opción **Edge-TTS (Alta Calidad)**. Este motor utiliza sintetizadores neuronales avanzados en la nube de Microsoft, proporcionando pausas naturales, entonación conversacional y una pronunciación excelente tanto en español como en inglés.
 - **Voz / Idioma:** Selecciona tu voz favorita (como Álvaro para acento de España, Jorge o Dalia para acento de México, o voces en inglés si estás estudiando ese idioma).

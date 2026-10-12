@@ -4,12 +4,20 @@
 
 **PDF Audiobook Studio** es una aplicación de escritorio profesional y elegante diseñada para convertir documentos PDF largos (incluso de más de 160 páginas) en archivos de audio de alta calidad. ¡Convierte tus libros, apuntes o manuales en audiolibros organizados y llévalos contigo a donde quieras! 🚀
 
+Hay dos ediciones:
+
+| Edición | Dónde | Voces |
+|---|---|---|
+| Python (PySide6) | `python main.py` | Edge-TTS, gTTS, voces locales |
+| **Swift nativa (macOS)** | [`swift/`](swift/README.md) | Voces **neuronales** de Microsoft Edge, **Grok TTS (xAI)** y OpenAI TTS. **No usa las voces de macOS** (demasiado robóticas). |
+
 ---
 
 ## ✨ Características Principales
 
 *   **🎙️ Múltiples Motores de Voz (TTS):** Soporte para Edge-TTS (voces neuronales de alta calidad), pyttsx3 (offline) y gTTS (Google).
 *   **📚 Soporte para Documentos Largos:** Procesamiento optimizado por bloques (chunks) para no saturar la memoria, ideal para PDFs de cientos de páginas.
+*   **🗂️ Un archivo por capítulo:** Lee el índice del PDF (marcadores o encabezados) y exporta una carpeta con un audio por parte o capítulo. Si el índice mezcla secciones al mismo nivel, agrupa por PARTES / capítulos.
 *   **⏸️ Control Total:** Posibilidad de pausar, reanudar o cancelar la conversión en cualquier momento.
 *   **💾 Persistencia:** Tu progreso se guarda automáticamente en una base de datos local (SQLite). ¡Si cierras la app, puedes continuar desde donde lo dejaste!
 *   **🎵 Formatos de Exportación:** Soporte para salida en `.mp3`, `.wav` y `.m4a` (con metadatos y etiquetas).
@@ -79,9 +87,10 @@ python main.py
 1. Arrastra y suelta un archivo `.pdf` en el área de carga.
 2. Selecciona el rango de páginas.
 3. Elige el motor de voz (recomendamos **Edge-TTS** para máxima calidad) y ajusta la velocidad.
-4. Selecciona la carpeta de destino.
-5. Haz clic en **"▶ Iniciar Conversión"**.
-6. ¡Relájate mientras la aplicación hace la magia! ✨ Puedes ver el progreso en tiempo real en la terminal inferior.
+4. Si el PDF tiene índice, activa **Un archivo por capítulo** para obtener una carpeta con un audio por parte/capítulo en lugar de un solo archivo.
+5. Selecciona la carpeta de destino.
+6. Haz clic en **"▶ Iniciar Conversión"**.
+7. ¡Relájate mientras la aplicación hace la magia! ✨ Puedes ver el progreso en tiempo real en la terminal inferior.
 
 ---
 
@@ -99,7 +108,7 @@ El proyecto está diseñado con una arquitectura robusta MVC y multiproceso:
 
 ## 👨‍💻 Contribución
 
-¡Las contribuciones son bienvenidas! Si deseas mejorar la app (por ejemplo, añadiendo detección avanzada de capítulos mediante TOC), siéntete libre de hacer un _fork_ del repositorio y enviar un _pull request_.
+¡Las contribuciones son bienvenidas! Siéntete libre de hacer un _fork_ del repositorio y enviar un _pull request_.
 
 ## ⚖️ Aviso Legal y Copyright
 

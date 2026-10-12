@@ -40,7 +40,8 @@ class DatabaseManager:
             engine_type TEXT NOT NULL,
             voice_id TEXT NOT NULL,
             rate REAL NOT NULL,
-            format_ext TEXT NOT NULL DEFAULT 'mp3'
+            format_ext TEXT NOT NULL DEFAULT 'mp3',
+            split_by_chapter INTEGER NOT NULL DEFAULT 0
         );
         """
         
@@ -55,6 +56,8 @@ class DatabaseManager:
             audio_path TEXT,
             status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING, PROCESSING, COMPLETED, FAILED
             error_message TEXT,
+            chapter_index INTEGER,
+            chapter_title TEXT,
             FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
             UNIQUE(project_id, chunk_index)
         );
@@ -74,6 +77,7 @@ class DatabaseManager:
             cursor.execute(sql_projects)
             cursor.execute(sql_chunks)
             cursor.execute(sql_settings)
+            self._migrate_columns(cursor)
             conn.commit()
             logger.info("Database schema initialized successfully.")
         except Exception as e:
@@ -82,6 +86,18 @@ class DatabaseManager:
         finally:
             if conn:
                 conn.close()
+
+    @staticmethod
+    def _migrate_columns(cursor) -> None:
+        """Add columns introduced after the first schema without rebuilding the DB."""
+        def ensure(table: str, column: str, decl: str) -> None:
+            existing = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+        ensure("projects", "split_by_chapter", "INTEGER NOT NULL DEFAULT 0")
+        ensure("chunks", "chapter_index", "INTEGER")
+        ensure("chunks", "chapter_title", "TEXT")
 
     def save_setting(self, key: str, value: str) -> None:
         """Saves a setting key-value pair."""

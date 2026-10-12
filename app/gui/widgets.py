@@ -15,7 +15,7 @@ class CardFrame(QFrame):
 
 class DragDropFrame(QFrame):
     """A specialized frame that acts as a modern drag-and-drop zone for PDF files."""
-    file_dropped = Signal(str)
+    files_dropped = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -32,7 +32,7 @@ class DragDropFrame(QFrame):
         self.icon_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.icon_label)
         
-        self.text_label = QLabel("Arrastra y suelta tu archivo PDF aquí\no haz clic para seleccionar uno", self)
+        self.text_label = QLabel("Arrastra y suelta uno o varios archivos PDF aquí\no haz clic para seleccionarlos", self)
         self.text_label.setAlignment(Qt.AlignCenter)
         self.text_label.setStyleSheet("font-weight: 500; color: #94A3B8; font-size: 13px;")
         layout.addWidget(self.text_label)
@@ -54,16 +54,20 @@ class DragDropFrame(QFrame):
         event.accept()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        """Extracts the dropped file path and emits signal."""
+        """Extracts the dropped file paths and emits signal."""
         self.setStyleSheet("")
         urls = event.mimeData().urls()
+        filepaths = []
         for url in urls:
             filepath = url.toLocalFile()
             if filepath.lower().endswith(".pdf"):
-                event.acceptProposedAction()
-                self.file_dropped.emit(filepath)
-                return
-        event.ignore()
+                filepaths.append(filepath)
+        
+        if filepaths:
+            event.acceptProposedAction()
+            self.files_dropped.emit(filepaths)
+        else:
+            event.ignore()
 
     def mousePressEvent(self, event) -> None:
         """Trigger native dialog click if clicking inside drag zone."""

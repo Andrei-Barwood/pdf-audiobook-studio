@@ -14,6 +14,13 @@ except ImportError:
 
 try:
     import edge_tts
+    import edge_tts.constants
+    import edge_tts.communicate
+    edge_tts.constants.WSS_URL = (
+        "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
+        f"?Ocp-Apim-Subscription-Key={edge_tts.constants.TRUSTED_CLIENT_TOKEN}"
+    )
+    edge_tts.communicate.WSS_URL = edge_tts.constants.WSS_URL
     EDGE_TTS_AVAILABLE = True
 except ImportError:
     EDGE_TTS_AVAILABLE = False
@@ -89,6 +96,8 @@ class EdgeTTSEngine(BaseTTSEngine):
             {"id": "es-ES-ElviraNeural", "name": "Elvira (Neural) - España 🇪🇸"},
             {"id": "es-MX-JorgeNeural", "name": "Jorge (Neural) - México 🇲🇽"},
             {"id": "es-MX-DaliaNeural", "name": "Dalia (Neural) - México 🇲🇽"},
+            {"id": "es-AR-ElenaNeural", "name": "Elena (Neural) - Argentina 🇦🇷"},
+            {"id": "es-AR-TomasNeural", "name": "Tomás (Neural) - Argentina 🇦🇷"},
             {"id": "en-US-GuyNeural", "name": "Guy (Neural) - USA 🇺🇸"},
             {"id": "en-US-AriaNeural", "name": "Aria (Neural) - USA 🇺🇸"},
             {"id": "en-GB-SoniaNeural", "name": "Sonia (Neural) - UK 🇬🇧"},
@@ -192,11 +201,102 @@ class GTTSEngine(BaseTTSEngine):
         ]
 
 
+class GoogleCloudTTSEngine(BaseTTSEngine):
+    """Google Cloud & Gemini AI Text-to-Speech engine supporting Journey, Studio, Neural2, and Gemini voices."""
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+    def synthesize(self, text: str, output_path: str, voice_id: str, rate: float, volume: float = 1.0) -> None:
+        key = self.api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not key:
+            raise TTSEngineError("Se requiere una API Key de Google (configurada en variable de entorno GOOGLE_API_KEY o en la app).")
+
+        import requests
+        import base64
+
+        if voice_id.startswith("gemini-"):
+            gemini_voice = voice_id.replace("gemini-", "").capitalize()
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}"
+            payload = {
+                "contents": [{
+                    "parts": [{
+                        "text": f"Narrate the following text aloud with high expressiveness. Do not add introductions or comments, read only the exact words provided:\n\n{text}"
+                    }]
+                }],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voiceName": gemini_voice
+                            }
+                        }
+                    }
+                }
+            }
+            resp = requests.post(url, json=payload, timeout=120)
+            if resp.status_code != 200:
+                raise TTSEngineError(f"Google Gemini TTS ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            try:
+                audio_b64 = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+                audio_bytes = base64.b64decode(audio_b64)
+                with open(output_path, "wb") as f:
+                    f.write(audio_bytes)
+            except Exception as e:
+                raise TTSEngineError(f"Error procesando audio de Gemini: {e}")
+        else:
+            url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={key}"
+            lang = "-".join(voice_id.split("-")[:2]) if "-" in voice_id else "es-ES"
+            speed = min(max(rate, 0.25), 4.0)
+            payload = {
+                "input": {"text": text},
+                "voice": {"languageCode": lang, "name": voice_id},
+                "audioConfig": {"audioEncoding": "MP3", "speakingRate": speed}
+            }
+            resp = requests.post(url, json=payload, timeout=120)
+            if resp.status_code != 200:
+                raise TTSEngineError(f"Google Cloud TTS ({resp.status_code}): {resp.text}")
+            data = resp.json()
+            audio_b64 = data.get("audioContent")
+            if not audio_b64:
+                raise TTSEngineError("Google Cloud TTS no devolvió audio.")
+            with open(output_path, "wb") as f:
+                f.write(base64.b64decode(audio_b64))
+
+        logger.info(f"Google TTS synthesized successfully. Output: {output_path}")
+
+    def get_available_voices(self) -> List[Dict[str, str]]:
+        return [
+            {"id": "es-ES-Journey-F", "name": "Journey · Princesa de Cuento 👑 (España)"},
+            {"id": "es-ES-Journey-D", "name": "Journey · Narrador Legendario (España)"},
+            {"id": "es-ES-Studio-C", "name": "Studio · Dama Distinguida ✨ (España)"},
+            {"id": "es-ES-Studio-F", "name": "Studio · Narradora Cálida (España)"},
+            {"id": "es-ES-Neural2-A", "name": "Neural2 · Clara y Juvenil (España)"},
+            {"id": "es-ES-Neural2-C", "name": "Neural2 · Dulce y Melódica 🌸 (España)"},
+            {"id": "es-ES-Neural2-E", "name": "Neural2 · Princesa Serena (España)"},
+            {"id": "es-US-Journey-F", "name": "Journey · Princesa Latina 👑 (Latinoamérica)"},
+            {"id": "es-US-Journey-D", "name": "Journey · Narrador Latino (Latinoamérica)"},
+            {"id": "es-US-Neural2-A", "name": "Neural2 · Sofía (Latinoamérica)"},
+            {"id": "gemini-kore", "name": "Gemini · Kore (Princesa Dulce) 🌸"},
+            {"id": "gemini-aoede", "name": "Gemini · Aoede (Musa Artística) 🎶"},
+            {"id": "gemini-leda", "name": "Gemini · Leda (Regia y Elegante) 👑"},
+            {"id": "gemini-callirrhoe", "name": "Gemini · Callirrhoe (Cristalina) 💧"},
+            {"id": "gemini-puck", "name": "Gemini · Puck (Ágil y Alegre)"},
+            {"id": "gemini-fenrir", "name": "Gemini · Fenrir (Potente y Narrativa)"},
+            {"id": "en-US-Journey-F", "name": "Journey · English Princess 👑"},
+            {"id": "en-US-Studio-O", "name": "Studio · English Professional"},
+        ]
+
+
 def get_tts_engine(engine_type: str) -> BaseTTSEngine:
     """Factory function returning the selected engine instance."""
     engine_type = engine_type.lower()
     if engine_type == "edge-tts" and EDGE_TTS_AVAILABLE:
         return EdgeTTSEngine()
+    elif engine_type in ("google", "google-tts", "google-cloud"):
+        return GoogleCloudTTSEngine()
     elif engine_type == "gtts" and GTTS_AVAILABLE:
         return GTTSEngine()
     elif PYTTSX3_AVAILABLE:

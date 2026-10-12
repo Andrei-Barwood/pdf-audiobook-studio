@@ -534,9 +534,19 @@ final class StudioViewModel: ObservableObject {
                 throw StudioError.audio("El archivo de audio está vacío.")
             }
             if data.prefix(4) == Data("RIFF".utf8) {
-                previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.wav.rawValue)
+                do {
+                    previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.wav.rawValue)
+                } catch {
+                    let tempWav = AppPaths.cache.appendingPathComponent("temp_play.wav")
+                    try? data.write(to: tempWav)
+                    previewPlayer = try AVAudioPlayer(contentsOf: tempWav)
+                }
             } else if data.prefix(3) == Data("ID3".utf8) || (data.count > 1 && data[0] == 0xFF && (data[1] & 0xE0) == 0xE0) {
-                previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.mp3.rawValue)
+                do {
+                    previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.mp3.rawValue)
+                } catch {
+                    previewPlayer = try AVAudioPlayer(contentsOf: url)
+                }
             } else if data.count >= 8 && data.subdata(in: 4..<8) == Data("ftyp".utf8) {
                 previewPlayer = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.m4a.rawValue)
             } else {
@@ -545,6 +555,7 @@ final class StudioViewModel: ObservableObject {
             previewPlayer?.prepareToPlay()
             previewPlayer?.play()
         } catch {
+            AppLog.write("ERROR Reproducción: \(error.localizedDescription)")
             present("Reproducción", error.localizedDescription)
         }
     }

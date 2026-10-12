@@ -74,6 +74,7 @@ enum AudioBuilder {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpeg)
         process.arguments = [
+            "-nostdin",
             "-loglevel", "error",
             "-y",
             "-i", inputURL.path,
@@ -81,13 +82,19 @@ enum AudioBuilder {
             "-b:a", bitrate,
             outputURL.path
         ]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        let errPipe = Pipe()
+        process.standardError = errPipe
         try process.run()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0,
               FileManager.default.fileExists(atPath: outputURL.path),
               (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 > 0 }) ?? false else {
-            throw StudioError.audio("Error al codificar MP3 con ffmpeg.")
+            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            let errMsg = String(data: errData, encoding: .utf8) ?? ""
+            throw StudioError.audio("Error al codificar MP3 con ffmpeg: \(errMsg.prefix(200))")
         }
     }
 

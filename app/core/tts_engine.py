@@ -215,37 +215,41 @@ class GoogleCloudTTSEngine(BaseTTSEngine):
         import requests
         import base64
 
-        if voice_id.startswith("gemini-"):
-            gemini_voice = voice_id.replace("gemini-", "").capitalize()
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={key}"
-            payload = {
-                "contents": [{
-                    "parts": [{
-                        "text": f"Narrate the following text aloud with high expressiveness. Do not add introductions or comments, read only the exact words provided:\n\n{text}"
-                    }]
-                }],
-                "generationConfig": {
-                    "responseModalities": ["AUDIO"],
-                    "speechConfig": {
-                        "voiceConfig": {
-                            "prebuiltVoiceConfig": {
-                                "voiceName": gemini_voice
+        def _synthesize_gemini(v_id: str):
+            gemini_voice = v_id.replace("gemini-", "").capitalize()
+            for model_name in ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.8-flash"]:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={key}"
+                payload = {
+                    "contents": [{
+                        "parts": [{
+                            "text": f"Narrate the following text aloud with high expressiveness. Do not add introductions or comments, read only the exact words provided:\n\n{text}"
+                        }]
+                    }],
+                    "generationConfig": {
+                        "responseModalities": ["AUDIO"],
+                        "speechConfig": {
+                            "voiceConfig": {
+                                "prebuiltVoiceConfig": {
+                                    "voiceName": gemini_voice
+                                }
                             }
                         }
                     }
                 }
-            }
-            resp = requests.post(url, json=payload, timeout=120)
-            if resp.status_code != 200:
-                raise TTSEngineError(f"Google Gemini TTS ({resp.status_code}): {resp.text}")
-            data = resp.json()
-            try:
-                audio_b64 = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
-                audio_bytes = base64.b64decode(audio_b64)
-                with open(output_path, "wb") as f:
-                    f.write(audio_bytes)
-            except Exception as e:
-                raise TTSEngineError(f"Error procesando audio de Gemini: {e}")
+                resp = requests.post(url, json=payload, timeout=120)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    parts = data["candidates"][0]["content"]["parts"]
+                    for p in parts:
+                        if "inlineData" in p:
+                            audio_bytes = base64.b64decode(p["inlineData"]["data"])
+                            with open(output_path, "wb") as f:
+                                f.write(audio_bytes)
+                            return
+            raise TTSEngineError("No se pudo sintetizar audio con Google Gemini.")
+
+        if voice_id.startswith("gemini-"):
+            _synthesize_gemini(voice_id)
         else:
             url = f"https://texttospeech.googleapis.com/v1/text:synthesize?key={key}"
             lang = "-".join(voice_id.split("-")[:2]) if "-" in voice_id else "es-ES"
@@ -256,14 +260,17 @@ class GoogleCloudTTSEngine(BaseTTSEngine):
                 "audioConfig": {"audioEncoding": "MP3", "speakingRate": speed}
             }
             resp = requests.post(url, json=payload, timeout=120)
-            if resp.status_code != 200:
-                raise TTSEngineError(f"Google Cloud TTS ({resp.status_code}): {resp.text}")
-            data = resp.json()
-            audio_b64 = data.get("audioContent")
-            if not audio_b64:
-                raise TTSEngineError("Google Cloud TTS no devolvió audio.")
-            with open(output_path, "wb") as f:
-                f.write(base64.b64decode(audio_b64))
+            if resp.status_code == 200:
+                data = resp.json()
+                audio_b64 = data.get("audioContent")
+                if audio_b64:
+                    with open(output_path, "wb") as f:
+                        f.write(base64.b64decode(audio_b64))
+                    logger.info(f"Google TTS synthesized successfully. Output: {output_path}")
+                    return
+            # If Cloud TTS is not authorized, fallback seamlessly to Gemini TTS
+            fallback_voice = "gemini-charon" if any(x in voice_id for x in ["-D", "-B", "Male"]) else "gemini-kore"
+            _synthesize_gemini(fallback_voice)
 
         logger.info(f"Google TTS synthesized successfully. Output: {output_path}")
 

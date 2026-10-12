@@ -20,7 +20,15 @@ final class GoogleTTSEngine: TTSEngine {
         if voiceID.hasPrefix("gemini-") {
             try await synthesizeWithGemini(text: cleaned, voiceID: voiceID, apiKey: apiKey, to: url)
         } else {
-            try await synthesizeWithCloudTTS(text: cleaned, voiceID: voiceID, rate: rate, apiKey: apiKey, to: url)
+            do {
+                try await synthesizeWithCloudTTS(text: cleaned, voiceID: voiceID, rate: rate, apiKey: apiKey, to: url)
+            } catch {
+                // If Cloud TTS fails (e.g. 401 unauthenticated with Google AI key), fallback to Gemini TTS with corresponding voice
+                let fallbackVoice = (voiceID.contains("-D") || voiceID.contains("-B") || voiceID.contains("Male"))
+                    ? "gemini-charon"
+                    : "gemini-kore"
+                try await synthesizeWithGemini(text: cleaned, voiceID: fallbackVoice, apiKey: apiKey, to: url)
+            }
         }
     }
 
@@ -50,17 +58,11 @@ final class GoogleTTSEngine: TTSEngine {
         var request = URLRequest(url: endpoint, timeoutInterval: 120)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("https://aistudio.google.com", forHTTPHeaderField: "Referer")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw StudioError.tts("Respuesta inválida del servidor de Google TTS.")
-        }
-
-        if http.statusCode == 401 || http.statusCode == 403 {
-            let errorMsg = Self.parseErrorMessage(from: data)
-            throw StudioError.tts("API Key de Google no autorizada (\(http.statusCode)): \(errorMsg). Verifica tu clave en Ajustes y que el servicio Text-to-Speech esté habilitado en tu cuenta.")
         }
 
         if http.statusCode >= 400 {
@@ -78,80 +80,79 @@ final class GoogleTTSEngine: TTSEngine {
         try audioData.write(to: url, options: .atomic)
     }
 
-    // MARK: - Google Gemini Multimodal Audio (Aoede, Kore, Leda...)
+    // MARK: - Google Gemini Multimodal Audio (gemini-3.8-flash-tts)
 
     private func synthesizeWithGemini(text: String, voiceID: String, apiKey: String, to url: URL) async throws {
         let rawVoice = voiceID.replacingOccurrences(of: "gemini-", with: "").capitalized
-        let model = "gemini-3.8-flash"
-        guard let endpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
-            throw StudioError.tts("URL de Google Gemini inválida.")
-        }
+        let candidateModels = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-3.8-flash"]
+        var lastError: Error?
 
-        let body: [String: Any] = [
-            "contents": [
-                [
-                    "parts": [
-                        [
-                            "text": "Narrate the following text aloud with natural expressive human tone suitable for an audiobook. Read only the exact words without any preamble, greeting, explanation or conclusion:\n\n\(text)"
+        for model in candidateModels {
+            guard let endpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
+                continue
+            }
+
+            let body: [String: Any] = [
+                "contents": [
+                    [
+                        "parts": [
+                            [
+                                "text": "Narrate the following text aloud with natural expressive human tone suitable for an audiobook. Read only the exact words without any preamble, greeting, explanation or conclusion:\n\n\(text)"
+                            ]
                         ]
                     ]
-                ]
-            ],
-            "generationConfig": [
-                "responseModalities": ["AUDIO"],
-                "speechConfig": [
-                    "voiceConfig": [
-                        "prebuiltVoiceConfig": [
+                ],
+                "generationConfig": [
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": [
+                        "voiceConfig": [
                             "voiceName": rawVoice
                         ]
                     ]
                 ]
             ]
-        ]
 
-        var request = URLRequest(url: endpoint, timeoutInterval: 180)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            var request = URLRequest(url: endpoint, timeoutInterval: 180)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw StudioError.tts("Respuesta inválida de Google Gemini.")
-        }
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else { continue }
+                if http.statusCode == 200 {
+                    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let candidates = json["candidates"] as? [[String: Any]],
+                          let firstCandidate = candidates.first,
+                          let content = firstCandidate["content"] as? [String: Any],
+                          let parts = content["parts"] as? [[String: Any]] else {
+                        continue
+                    }
 
-        if http.statusCode == 401 || http.statusCode == 403 {
-            let errorMsg = Self.parseErrorMessage(from: data)
-            throw StudioError.tts("API Key de Google rechazada (\(http.statusCode)): \(errorMsg). Revisa tu API key en Ajustes.")
-        }
+                    var foundAudioData: Data?
+                    for part in parts {
+                        if let inlineData = part["inlineData"] as? [String: Any],
+                           let base64 = inlineData["data"] as? String,
+                           let audioBytes = Data(base64Encoded: base64) {
+                            foundAudioData = audioBytes
+                            break
+                        }
+                    }
 
-        if http.statusCode >= 400 {
-            let errorMsg = Self.parseErrorMessage(from: data)
-            throw StudioError.tts("Google Gemini (\(http.statusCode)): \(errorMsg)")
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = json["candidates"] as? [[String: Any]],
-              let firstCandidate = candidates.first,
-              let content = firstCandidate["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]] else {
-            throw StudioError.tts("Estructura de respuesta de Gemini no reconocida.")
-        }
-
-        var foundAudioData: Data?
-        for part in parts {
-            if let inlineData = part["inlineData"] as? [String: Any],
-               let base64 = inlineData["data"] as? String,
-               let audioBytes = Data(base64Encoded: base64) {
-                foundAudioData = audioBytes
-                break
+                    if let audio = foundAudioData, !audio.isEmpty {
+                        try audio.write(to: url, options: .atomic)
+                        return
+                    }
+                } else {
+                    let errorMsg = Self.parseErrorMessage(from: data)
+                    lastError = StudioError.tts("Google Gemini (\(http.statusCode)): \(errorMsg)")
+                }
+            } catch {
+                lastError = error
             }
         }
 
-        guard let audio = foundAudioData, !audio.isEmpty else {
-            throw StudioError.tts("Google Gemini no generó datos de audio para este bloque.")
-        }
-
-        try audio.write(to: url, options: .atomic)
+        throw lastError ?? StudioError.tts("No se pudo sintetizar audio con Google Gemini.")
     }
 
     private func extractLocale(from voiceID: String) -> String {
